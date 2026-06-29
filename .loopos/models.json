@@ -1,0 +1,134 @@
+{
+  "models": {
+    "claude-opus": {
+      "provider": "claude",
+      "model_id": "claude-opus-4-6",
+      "cli": "claude",
+      "exec_cmd": "claude -p '{prompt}' --model claude-opus-4-6",
+      "tier": "high",
+      "cost_per_1k_output": 0.075,
+      "context_window": 200000,
+      "best_for": ["complex architecture", "multi-file refactor", "subtle bugs", "security review"],
+      "notes": "Most capable, use for complex tasks"
+    },
+    "claude-sonnet": {
+      "provider": "claude",
+      "model_id": "claude-sonnet-4-6",
+      "cli": "claude",
+      "exec_cmd": "claude -p '{prompt}' --model claude-sonnet-4-6",
+      "tier": "mid",
+      "cost_per_1k_output": 0.015,
+      "context_window": 200000,
+      "best_for": ["feature implementation", "testing", "code review", "standard tasks"],
+      "notes": "Good balance of capability and cost"
+    },
+    "claude-haiku": {
+      "provider": "claude",
+      "model_id": "claude-haiku-4-5",
+      "cli": "claude",
+      "exec_cmd": "claude -p '{prompt}' --model claude-haiku-4-5-20251001",
+      "tier": "low",
+      "cost_per_1k_output": 0.005,
+      "context_window": 200000,
+      "best_for": ["simple edits", "formatting", "rename", "boilerplate", "adapter routing"],
+      "notes": "Fast and cheap, use for simple tasks"
+    },
+    "codex": {
+      "provider": "openai",
+      "model_id": "gpt-5.4-pro",
+      "cli": "codex",
+      "exec_cmd": "codex exec -m gpt-5.4-pro --full-auto '{prompt}'",
+      "tier": "high",
+      "cost_per_1k_output": 0.040,
+      "context_window": 200000,
+      "best_for": ["algorithmic problems", "reasoning-heavy tasks", "debugging complex logic"],
+      "notes": "Strong at reasoning, good at math/algorithm"
+    },
+    "codex-mini": {
+      "provider": "openai",
+      "model_id": "gpt-5.4",
+      "cli": "codex",
+      "exec_cmd": "codex exec -m gpt-5.4 --full-auto '{prompt}'",
+      "tier": "mid",
+      "cost_per_1k_output": 0.012,
+      "context_window": 200000,
+      "best_for": ["standard implementation", "unit tests", "refactoring"],
+      "notes": "Good for most coding tasks"
+    },
+    "deepseek": {
+      "provider": "deepseek",
+      "model_id": "deepseek-v4-pro",
+      "cli": "opencode",
+      "exec_cmd": "tmux-worker",
+      "tier": "low",
+      "cost_per_1k_output": 0.002,
+      "context_window": 128000,
+      "best_for": ["boilerplate generation", "simple CRUD", "translation", "documentation"],
+      "notes": "Very cheap, good for bulk simple tasks"
+    },
+    "glm": {
+      "provider": "zhipu",
+      "model_id": "glm-5.2",
+      "cli": "opencode",
+      "exec_cmd": "tmux-worker",
+      "tier": "mid",
+      "cost_per_1k_output": 0.010,
+      "context_window": 128000,
+      "best_for": ["Chinese documentation", "Chinese API integration", "i18n tasks"],
+      "notes": "Good for Chinese-centric tasks"
+    },
+    "gemini": {
+      "provider": "google",
+      "model_id": "gemini-2.5-pro",
+      "cli": "gemini",
+      "exec_cmd": "tmux-worker",
+      "tier": "high",
+      "cost_per_1k_output": 0.030,
+      "context_window": 1000000,
+      "best_for": ["large context tasks", "multi-file analysis", "codebase-wide refactoring"],
+      "notes": "Massive context window, good for whole-codebase tasks. Runs in tmux."
+    },
+    "cursor": {
+      "provider": "cursor",
+      "model_id": "default",
+      "cli": "cursor-agent",
+      "exec_cmd": "tmux-worker",
+      "tier": "mid",
+      "cost_per_1k_output": 0.015,
+      "context_window": 200000,
+      "best_for": ["editor-style edits", "focused refactoring", "quick fixes"],
+      "notes": "Editor-integrated agent. Runs in tmux."
+    }
+  },
+
+  "auto_assignment": {
+    "priority_order": ["claude-opus", "glm", "claude-sonnet", "codex", "deepseek"],
+    "complexity_rules": [
+      {
+        "complexity": "high",
+        "criteria": ["multi-file architecture", "security-sensitive", "performance-critical", "complex state management"],
+        "default_model": "claude-opus",
+        "fallback": "glm"
+      },
+      {
+        "complexity": "mid",
+        "criteria": ["single feature", "standard CRUD", "API integration", "unit tests", "refactoring"],
+        "default_model": "glm",
+        "fallback": "claude-sonnet"
+      },
+      {
+        "complexity": "low",
+        "criteria": ["rename", "formatting", "simple config", "boilerplate", "comments", "documentation"],
+        "default_model": "codex",
+        "fallback": "deepseek"
+      }
+    ]
+  },
+
+  "defaults": {
+    "planner": "claude-opus",
+    "developer": "glm",
+    "tester": "claude-sonnet",
+    "adapter": "codex"
+  }
+}

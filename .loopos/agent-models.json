@@ -1,0 +1,54 @@
+{
+  "agent_models": {
+    "explorer":       "claude-haiku-4-5",
+    "analyst":        "claude-opus-4-6",
+    "planner":        "claude-sonnet-4-6",
+    "architect":      "claude-opus-4-6",
+    "critic":         "claude-opus-4-6",
+    "developer":      "auto",
+    "debugger":       "auto",
+    "tester-logic":   "claude-sonnet-4-6",
+    "tester-quality": "claude-sonnet-4-6",
+    "code-reviewer":  "claude-opus-4-6",
+    "verifier":       "claude-sonnet-4-6"
+  },
+
+  "_doc": {
+    "说明": "集中配置每个 Agent 使用的模型，支持任意 LLM",
+    "覆盖优先级": "AGENT_MODEL_DEFAULTS < agent-models.json < args.agent_models < args.model_overrides (per task)",
+
+    "Claude 模型": {
+      "全称": "claude-opus-4-6, claude-opus-4-8, claude-sonnet-4-6, claude-haiku-4-5",
+      "简称": "opus, sonnet, haiku (向后兼容)"
+    },
+
+    "外部 LLM (opencode 统一网关, 推荐)": {
+      "说明": "opencode 支持所有主流 provider，通过 tmux 运行，有完整文件系统访问",
+      "OpenAI": "gpt-5.4-pro, gpt-5.4-mini, gpt-5.4, gpt-5.5, gpt-5.5-pro, o3, o3-pro, o4-mini",
+      "Google": "gemini-2.5-pro, gemini-3.1-pro, gemini-3.5-flash",
+      "DeepSeek": "deepseek-v4-pro, deepseek-v4-flash, deepseek-chat, deepseek-coder",
+      "智谱 GLM": "glm-5, glm-5.1, glm-5-turbo, glm-4-plus"
+    },
+
+    "其他 CLI (需单独安装)": {
+      "Cursor": "cursor"
+    },
+
+    "auto": "developer 和 debugger 设为 auto 时，跟随 Planner 分配的任务模型",
+
+    "示例 — 省钱配置": {
+      "analyst": "claude-sonnet-4-6",
+      "critic": "claude-sonnet-4-6",
+      "tester-logic": "gpt-5.4-mini",
+      "tester-quality": "gpt-5.4-mini"
+    },
+
+    "示例 — 多模型混用": {
+      "analyst": "gpt-5.4-pro",
+      "critic": "claude-opus-4-6",
+      "tester-logic": "deepseek-v4-pro",
+      "code-reviewer": "claude-opus-4-6",
+      "verifier": "gemini-2.5-pro"
+    }
+  }
+}

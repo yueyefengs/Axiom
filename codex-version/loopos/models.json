@@ -1,0 +1,85 @@
+{
+  "models": {
+    "gpt-5.4-pro": {
+      "provider": "openai",
+      "model_id": "gpt-5.4-pro",
+      "cli": "codex",
+      "tier": "high",
+      "best_for": ["complex architecture", "multi-file refactor", "subtle bugs", "security review"],
+      "notes": "Main model, most capable"
+    },
+    "gpt-5.4-mini": {
+      "provider": "openai",
+      "model_id": "gpt-5.4-mini",
+      "cli": "codex",
+      "tier": "mid",
+      "best_for": ["testing", "simple edits", "boilerplate", "formatting"],
+      "notes": "Fast and cheap for simple tasks"
+    },
+    "o3": {
+      "provider": "openai",
+      "model_id": "o3",
+      "cli": "codex",
+      "tier": "high",
+      "best_for": ["algorithmic problems", "reasoning-heavy", "complex debugging"],
+      "notes": "Strong reasoning, good for math/algorithm"
+    },
+    "o4-mini": {
+      "provider": "openai",
+      "model_id": "o4-mini",
+      "cli": "codex",
+      "tier": "mid",
+      "best_for": ["standard implementation", "unit tests", "refactoring"],
+      "notes": "Balanced reasoning model"
+    },
+    "claude-opus": {
+      "provider": "anthropic",
+      "model_id": "claude-opus-4-6",
+      "cli": "claude",
+      "tier": "high",
+      "best_for": ["architecture review", "security audit", "complex analysis"],
+      "notes": "Cross-provider fallback for critical tasks"
+    },
+    "deepseek": {
+      "provider": "deepseek",
+      "model_id": "deepseek-coder",
+      "cli": "curl",
+      "tier": "low",
+      "best_for": ["boilerplate", "CRUD", "documentation"],
+      "notes": "Very cheap for bulk simple tasks"
+    },
+    "glm": {
+      "provider": "zhipu",
+      "model_id": "glm-4-plus",
+      "cli": "curl",
+      "tier": "mid",
+      "best_for": ["Chinese documentation", "i18n"],
+      "notes": "Good for Chinese-centric tasks"
+    }
+  },
+  "auto_assignment": {
+    "complexity_rules": [
+      {
+        "complexity": "high",
+        "default_model": "gpt-5.4-pro",
+        "fallback": "o3"
+      },
+      {
+        "complexity": "mid",
+        "default_model": "gpt-5.4-pro",
+        "fallback": "o4-mini"
+      },
+      {
+        "complexity": "low",
+        "default_model": "gpt-5.4-mini",
+        "fallback": "deepseek"
+      }
+    ]
+  },
+  "defaults": {
+    "planner": "gpt-5.4-pro",
+    "developer": "gpt-5.4-pro",
+    "tester": "gpt-5.4-mini",
+    "reviewer": "gpt-5.4-pro"
+  }
+}
