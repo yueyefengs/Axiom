@@ -14,7 +14,7 @@
   },
 
   "_doc": {
-    "说明": "集中配置每个 Agent 使用的模型，支持任意 LLM",
+    "说明": "集中配置每个 Agent 使用的模型；模型名必须存在于 supervisor-worker-demo.js 的 MODEL_REGISTRY，未知模型会让 workflow 抛错（H3：不静默降级）",
     "覆盖优先级": "AGENT_MODEL_DEFAULTS < agent-models.json < args.agent_models < args.model_overrides (per task)",
 
     "Claude 模型": {

@@ -86,7 +86,7 @@ ${collectStep}
 7. Run verification: cd ${workdir} && ${verify_cmd} 2>&1 ; capture combined output and note exit code (0 = pass).
 8. Summarize what the worker changed this round in 1-2 sentences (worker_summary).
 
-Return JSON: { "sid": <sid or "">, "round": ${round}, "opencode_session_id": <ses_... or "">, "verify_passed": <true iff verify exit 0>, "verify_output": <last ~2000 chars of verify output>, "worker_summary": <string> }`
+Return JSON: { "sid": <sid or "">, "round": ${round}, "opencode_session_id": <ses_... or "">, "verify_passed": <true iff verify exit 0>, "verify_output": <full verify output if under 3000 chars; otherwise first 500 chars + any lines matching error/failed/undefined/panic + last 1500 chars>, "worker_summary": <string> }`
 }
 
 function buildManualReviewPrompt(ctx) {

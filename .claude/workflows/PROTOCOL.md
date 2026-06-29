@@ -34,7 +34,7 @@
 | `planner` | sonnet | 写计划 | 任务拆解 → DAG，复杂度评估，模型分配 |
 | `architect` | opus | 只读 | 架构分析，调试指导，设计评审 |
 | `critic` | opus | 只读 | 最终质量关，多视角审查，对抗性分析 |
-| `developer` | opus | 实现 | 执行一个任务，最小化变更 |
+| `developer` | auto | 实现 | 执行一个任务，最小化变更（auto=跟随 planner 分配的任务模型） |
 | `debugger` | sonnet | 修复 | 根因分析，最小 diff 修复，构建错误解决 |
 | `tester-logic` | sonnet | 只读 | 逻辑测试：边界条件，错误处理，类型安全 |
 | `tester-quality` | sonnet | 只读 | 质量测试：模式、安全、性能、命名 |
@@ -71,9 +71,8 @@ analyst ──→ planner ──→ critic
 
 ### 升级路径
 
-- `developer` → 3次修复失败 → 升级到 `architect`
-- `debugger` → 3个假设失败 → 升级到 `architect`
-- `planner` 的计划 → `critic` 审查 → 若 REJECT → 重新规划
+- `developer`/`debugger` → 达到 MAX_FIX_RETRIES(3) 仍未通过 → 标记 `needs_manual_review`（注：architect 在 supervisor-worker 流程中未被调用，PROTOCOL 此前描述的"升级到 architect"未实现）
+- `planner` 的计划 → `critic` 审查 → 若 REJECT → 重新规划一次
 
 ## 通信协议
 
@@ -111,7 +110,7 @@ analyst ──→ planner ──→ critic
 | `reports/analyst_*.json` | 分析报告 | analyst | planner |
 | `reports/critic_*.json` | 审查报告 | critic | planner |
 | `reports/architect_*.json` | 架构报告 | architect | debugger |
-| `specs/deep-interview-*.md` | 需求规格 | deep-interview | planner |
+| `specs/interview-*.md` | 需求规格 | 主会话访谈 | planner |
 | `manual_review_needed.json` | 需人工介入 | persister | supervisor |
 
 ## 多模型路由
@@ -133,8 +132,16 @@ analyst ──→ planner ──→ critic
 ### 执行路径
 
 - **Claude 原生**（opus/sonnet/haiku）→ `agent()` + `model` 参数 + worktree 隔离
-- **外部模型**（gpt/deepseek/gemini/glm 等）→ opencode CLI tmux worker（统一网关，完整文件系统访问）
-- **独立 CLI**（cursor）→ tmux worker
+- **外部模型**（gpt/deepseek/gemini/glm 等）→ opencode CLI tmux worker：spawn → `wait`(shell 确定性轮询至终态) → collect → 读 stdout（统一网关，完整文件系统访问）
+- **独立 CLI**（cursor）→ tmux worker（同 wait 流程）
+- **未知模型名** → workflow 抛错（H3，不静默降级；模型真相源为 supervisor-worker-demo.js 的 MODEL_REGISTRY）
+
+### worktree 与合并（C2）
+
+- `worktree.baseRef=head`：worktree 基于 feature 分支而非 origin/main
+- 同层任务**串行**（非并行，符合 PRD MVP 串行原则）
+- dev/fix 完成即 merge worktree 分支回 feature 分支，并跑 `go build ./...` 验证
+- build 失败 → 任务 `build_failed`，进 manual_review + 下游 blocked（C1 门控）
 
 ### 文件
 
@@ -202,21 +209,20 @@ Workflow({ name: 'supervisor-worker', args: {
 
 ## 工作流程
 
-### 完整流水线（含 deep-interview）
+### 需求澄清（/deep-interview Skill）
+
+需求模糊时，Supervisor 在主会话调用 `/deep-interview` Skill（不通过后台 workflow——
+后台 workflow 无法与人交互，原 deep-interview.js 已改为 Skill）。Skill 在主会话执行，
+用 AskUserQuestion 逐维访谈，保留 4 维度清晰度模型 + ambiguity 打分 + 苏格拉底式提问，
+输出 spec 到 `.loopos/specs/interview-<slug>.md`。详见 `.claude/skills/deep-interview/SKILL.md`。
+
+### 完整流水线（含主会话访谈）
 
 ```
 用户: "我想做一个 XXX 功能"
   │
   ▼
-Supervisor: Workflow({ name: 'deep-interview', args: { request: '...' } })
-  │
-  ├─ Phase Initialize: 探测项目上下文
-  ├─ Phase Interview: 苏格拉底式提问 (每次一个问题，瞄准最弱维度)
-  │   ├─ Round 0: 枚举组件拓扑
-  │   ├─ Round 1-N: 目标/约束/标准/上下文 提问
-  │   ├─ 每轮打分: ambiguity = 1 - weighted(dimensions)
-  │   └─ 直到 ambiguity ≤ threshold (默认 20%)
-  └─ Phase Crystallize: 生成规格 → .loopos/specs/deep-interview-xxx.md
+Supervisor: 主会话线性访谈（AskUserQuestion 逐问，见上）→ .loopos/specs/interview-xxx.md
   │
   ▼
 Supervisor: Workflow({ name: 'supervisor-worker', args: { request: '...', spec: '...' } })
@@ -229,11 +235,11 @@ Supervisor: Workflow({ name: 'supervisor-worker', args: { request: '...', spec: 
   │   ├─ Planner 拆任务 + 模型分配
   │   └─ Critic 审查计划 (≥3 tasks 时)
   │
-  ├─ Phase Dev-Test Loop (per layer):
-  │   ├─ Developer (worktree/tmux) → commit
+  ├─ Phase Dev-Test Loop (per layer, 串行执行):
+  │   ├─ Developer (worktree, base=head) → commit → 即 merge 回 feat/xxx + go build
   │   ├─ parallel(Tester-Logic, Tester-Quality, Code-Reviewer)
-  │   ├─ if failed → Debugger 修复 (max 3)
-  │   └─ Merge Agent → feat/xxx
+  │   ├─ if failed → Debugger (worktree) → commit → 即 merge + go build (max 3)
+  │   └─ build 失败 → build_failed (manual_review + 下游 blocked)
   │
   ├─ Phase Verify:
   │   └─ Verifier 全局验证 (测试+构建+验收标准)
@@ -248,7 +254,7 @@ Supervisor: Workflow({ name: 'supervisor-worker', args: { request: '...', spec: 
 Supervisor: Workflow({ name: 'supervisor-worker', args: { request: '很明确的需求' } })
 ```
 
-跳过 deep-interview，直接进入 supervisor-worker。
+跳过访谈，直接进入 supervisor-worker。
 
 ### Git 分支模型
 

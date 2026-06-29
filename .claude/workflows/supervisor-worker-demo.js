@@ -159,7 +159,7 @@ function lookupModel(name) {
 
 function isClaude(name) {
   const m = lookupModel(name)
-  return m ? m.type === 'claude' : /^(opus|sonnet|haiku|claude)/i.test(name)
+  return m ? m.type === 'claude' : false
 }
 
 function toShorthand(name) {
@@ -208,8 +208,8 @@ async function routeAgent(prompt, opts) {
   const entry = lookupModel(modelName)
 
   if (!entry) {
-    log(`WARNING: Unknown model "${modelName}", falling back to sonnet`)
-    return await agent(prompt, { ...opts, model: 'sonnet' })
+    // H3: 未知模型 fail fast，不静默降级（防止"以为省钱实际烧 sonnet"）
+    throw new Error(`Unknown model "${modelName}" — register it in MODEL_REGISTRY or fix .loopos/agent-models.json. Refusing silent fallback.`)
   }
 
   // Claude 直连
@@ -218,7 +218,7 @@ async function routeAgent(prompt, opts) {
   }
 
   // 外部模型 — 通过 haiku 桥接 agent 路由
-  const safeLabel = (opts.label || 'ext').replace(/[^a-z0-9_:-]/gi, '_')
+  const safeLabel = (opts.label || 'ext').replace(/[^a-z0-9_-]/gi, '_')
 
   if (entry.type === 'opencode') {
     // OpenCode CLI — 统一网关，支持所有 provider/model，有文件系统访问
@@ -303,8 +303,11 @@ WORKFLOW (execute exactly these steps — do not improvise or poll manually):
 // Dev/Debugger 专用外部路由（需要 worktree + git commit）
 async function executeWithExternal(task, modelName, devPrompt, opts) {
   const entry = lookupModel(modelName)
-  if (!entry || entry.type === 'claude') {
-    return await agent(devPrompt, { ...opts, model: entry ? entry.shorthand : 'sonnet' })
+  if (!entry) {
+    throw new Error(`Unknown model "${modelName}" — register it in MODEL_REGISTRY or fix .loopos/agent-models.json. Refusing silent fallback.`)
+  }
+  if (entry.type === 'claude') {
+    return await agent(devPrompt, { ...opts, model: entry.shorthand })
   }
 
   // opencode 和 cli 都走 tmux 路径

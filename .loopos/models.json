@@ -68,7 +68,7 @@
     },
     "glm": {
       "provider": "zhipu",
-      "model_id": "glm-5.2",
+      "model_id": "glm-5",
       "cli": "opencode",
       "exec_cmd": "tmux-worker",
       "tier": "mid",

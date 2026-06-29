@@ -220,14 +220,14 @@ while true; do
     [ -z "$tid" ] && continue
 
     # 检查是否已完成
-    echo "$COMPLETED" | grep -q "$tid" && continue
+    echo "$COMPLETED" | grep -qw "$tid" && continue
 
     # 检查依赖是否都已完成
     all_deps_done=true
     if [ -n "$deps" ]; then
       IFS=',' read -ra DEP_ARR <<< "$deps"
       for dep in "${DEP_ARR[@]}"; do
-        echo "$COMPLETED" | grep -q "$dep" || { all_deps_done=false; break; }
+        echo "$COMPLETED" | grep -qw "$dep" || { all_deps_done=false; break; }
       done
     fi
 
