@@ -77,8 +77,26 @@ const PLAN_SCHEMA = {
     path: { type: 'string' },
     task_count: { type: 'number' },
     task_ids: { type: 'array', items: { type: 'string' } },
+    tasks: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          title: { type: 'string' },
+          description: { type: 'string' },
+          depends_on: { type: 'array', items: { type: 'string' } },
+          relevant_files: { type: 'array', items: { type: 'string' } },
+          acceptance_criteria: { type: 'string' },
+          complexity: { type: 'string' },
+          assigned_model: { type: 'string' },
+          model_reason: { type: 'string' },
+        },
+        required: ['id', 'title'],
+      },
+    },
   },
-  required: ['path', 'task_count', 'task_ids'],
+  required: ['path', 'task_count', 'task_ids', 'tasks'],
 }
 
 const CRITIC_SCHEMA = {
@@ -544,11 +562,14 @@ RULES:
 - Each task completable in ONE session, touching at most 3-5 files
 - Maximize parallelism, minimize dependencies
 - Include complexity and assigned_model for every task
-- Available external models: codex, codex-mini, gemini, cursor, deepseek, glm`,
+- Available external models: codex, codex-mini, gemini, cursor, deepseek, glm
+- Return the FULL tasks array in your structured output (each task with id/title/description/depends_on/relevant_files/acceptance_criteria/complexity/assigned_model/model_reason)`,
   { label: 'planner', schema: PLAN_SCHEMA, agentType: 'planner', model: resolveModel('planner') }
 )
 
 log(`Plan: ${plan.task_count} tasks → ${plan.task_ids.join(', ')}`)
+
+let finalPlan = plan  // L4: 复用 planner 返回的 tasks，避免再起 plan-reader 读文件
 
 // Step 2c: Critic 审查计划（可选 — 仅当任务数 ≥ 3 或涉及高复杂度时）
 if (plan.task_count >= 3 || args.critic !== false) {
@@ -584,11 +605,12 @@ ANALYST REPORT: ${analystReport.path}
 
 Read the critic's findings and address each one.
 Write revised plan to .loopos/current_plan.json.
-Return path + task info.`,
+Return path + task_count + task_ids + FULL tasks array (each task with id/title/description/depends_on/relevant_files/acceptance_criteria/complexity/assigned_model/model_reason).`,
       { label: 'replanner', schema: PLAN_SCHEMA, agentType: 'planner', model: resolveModel('planner') }
     )
 
     log(`Revised plan: ${replan.task_count} tasks`)
+    finalPlan = replan
   }
 }
 
@@ -597,36 +619,8 @@ Return path + task info.`,
 // ============================================================
 phase('Dev-Test Loop')
 
-const fullPlan = await agent(
-  `Read .loopos/current_plan.json and return structured data.`,
-  {
-    label: 'plan-reader',
-    schema: {
-      type: 'object',
-      properties: {
-        tasks: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              id: { type: 'string' },
-              title: { type: 'string' },
-              description: { type: 'string' },
-              depends_on: { type: 'array', items: { type: 'string' } },
-              relevant_files: { type: 'array', items: { type: 'string' } },
-              acceptance_criteria: { type: 'string' },
-              complexity: { type: 'string' },
-              assigned_model: { type: 'string' },
-              model_reason: { type: 'string' },
-            },
-            required: ['id', 'title'],
-          },
-        },
-      },
-      required: ['tasks'],
-    },
-  }
-)
+// L4: 直接复用 planner/replanner 返回的 tasks，不再起 plan-reader 读文件
+const fullPlan = finalPlan
 
 // DAG 分层（静态拓扑）+ 孤儿依赖校验（C1）
 const allTaskIds = new Set(fullPlan.tasks.map(t => t.id))
