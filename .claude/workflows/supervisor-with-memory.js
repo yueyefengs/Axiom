@@ -230,7 +230,7 @@ Write to .loopos/reports/test_quality_${task.id}.json. Return path + passed.`,
 
     const fix = await agent(
       `Fix bugs. Task: ${task.title}. Dev report: ${currentReport}. Failed tests: ${failPaths}
-Read all reports, fix issues, update dev report, append lesson to .loopos/lessons.jsonl, commit.
+Read all reports, fix issues, update dev report, append lesson (bash .loopos/state.sh add-lesson '{"issue":"...","fix":"..."}'), commit.
 Then run: git branch --show-current. Return { path: "<report path>", branch: "<current branch>" }.`,
       { label: `fix:${task.id}:${attempt}`, schema: BRANCH_SCHEMA, isolation: 'worktree' }
     )
@@ -257,11 +257,12 @@ const passedTasks = results.filter(r => r.status === 'passed')
 const failedTasks = results.filter(r => r.status !== 'passed')
 
 await agent(
-  `Update .loopos state files:
-- Add to state.json completed_tasks: ${passedTasks.map(r => r.task.id).join(', ')}
-- Append events to events.jsonl
-- Mark tasks in current_plan.json as completed
-- Update manual_review_needed.json with: ${failedTasks.map(r => r.task.id).join(', ') || 'none'}`,
+  `Run these deterministic state updates (do NOT edit .loopos/*.json by hand — use state.sh):
+${passedTasks.map(r => `bash .loopos/state.sh complete-task ${r.task.id}`).join('\n')}
+${failedTasks.map(r => `bash .loopos/state.sh fail-task ${r.task.id}`).join('\n')}
+bash .loopos/state.sh event workflow_resume passed=${passedTasks.length} failed=${failedTasks.length}
+Then mark completed tasks in .loopos/current_plan.json (edit by hand).
+Return the state.json path.`,
   { label: 'persist', schema: PATH_SCHEMA }
 )
 

@@ -447,8 +447,7 @@ REQUESTED BRANCH NAME: ${branchName || 'auto-generate from request'}
 DO:
 1. mkdir -p .loopos/reports .loopos/workers
 
-2. Read .loopos/state.json if exists, otherwise create:
-   { "completed_tasks": [], "total_tasks_run": 0, "project_summary": "" }
+2. Run: bash .loopos/state.sh init   (creates/validates state.json + decisions.json + manual_review_needed.json + events.jsonl)
 
 3. Read .loopos/lessons.jsonl if exists (last 20 lines)
 
@@ -834,7 +833,7 @@ FAILED REPORTS: ${failedReports.join(', ')}
 2. Read .loopos/lessons.jsonl for similar past issues
 3. Fix each issue with minimal diff
 4. Run tests to verify
-5. Append lesson to .loopos/lessons.jsonl
+5. Append lesson: bash .loopos/state.sh add-lesson '{"issue":"<what went wrong>","fix":"<the fix>"}'
 6. Update .loopos/reports/dev_${task.id}.json
 7. Git commit: "[${task.id}] fix: ..."
 8. Run: git branch --show-current
@@ -971,23 +970,19 @@ DO:
 1. Ensure you are on branch: ${featureBranch}
    Run: git checkout ${featureBranch}
 
-2. Update .loopos/state.json:
-   - Add passed task IDs to completed_tasks
-   - Increment total_tasks_run
-   - Add "current_branch": "${featureBranch}"
+2. Run these deterministic state updates (do NOT edit .loopos/*.json by hand — use state.sh):
+   ${passed.map(r => `bash .loopos/state.sh complete-task ${r.task.id} ${r.model_used || ''}`).join('\n   ')}
+   ${failed.map(r => `bash .loopos/state.sh fail-task ${r.task.id} ${r.status || 'needs_manual_review'}`).join('\n   ')}
+   bash .loopos/state.sh set-branch ${featureBranch}
+   bash .loopos/state.sh event workflow_run branch=${featureBranch} passed=${passed.length} failed=${failed.length}
 
-3. Append to .loopos/events.jsonl:
-   - Per task: {"type":"task_completed","task_id":"...","model":"..."}
-   - Summary: {"type":"workflow_run","branch":"${featureBranch}","passed":${passed.length},"failed":${failed.length},"model_stats":${JSON.stringify(modelStats)}}
+3. Update .loopos/current_plan.json: mark completed tasks (plan structure varies, edit by hand)
 
-4. Update .loopos/current_plan.json: mark completed tasks
+4. Clean up .loopos/workers/ session files (keep prompts for reference)
 
-5. If failures (including verify_failed tasks): write .loopos/manual_review_needed.json
-   with each failed task id, its status, and the relevant report path.
+5. Git commit: "[loopos] update state after workflow run"
 
-6. Clean up .loopos/workers/ session files (keep prompts for reference)
-
-7. Git commit: "[loopos] update state after workflow run"
+6. Run: git branch --show-current
 
 Return state path.`,
   { label: 'persister', schema: PATH_SCHEMA }

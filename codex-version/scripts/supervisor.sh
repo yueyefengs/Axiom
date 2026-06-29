@@ -94,12 +94,12 @@ log "========== Phase: Init =========="
 
 mkdir -p .loopos/reports .loopos/workers .loopos/specs
 
-# 初始化状态文件
-if [ ! -f .loopos/state.json ]; then
-  echo '{ "completed_tasks": [], "total_tasks_run": 0, "project_summary": "" }' > .loopos/state.json
-fi
-if [ ! -f .loopos/decisions.json ]; then
-  echo '{ "decisions": [] }' > .loopos/decisions.json
+# 初始化状态文件（H4：优先用 state.sh 确定性初始化，fallback 到原逻辑）
+if [ -f .loopos/state.sh ]; then
+  bash .loopos/state.sh init 2>/dev/null || { echo '{ "completed_tasks": [], "total_tasks_run": 0, "project_summary": "" }' > .loopos/state.json; echo '{ "decisions": [] }' > .loopos/decisions.json; }
+else
+  [ -f .loopos/state.json ] || echo '{ "completed_tasks": [], "total_tasks_run": 0, "project_summary": "" }' > .loopos/state.json
+  [ -f .loopos/decisions.json ] || echo '{ "decisions": [] }' > .loopos/decisions.json
 fi
 
 # 创建 feature 分支
@@ -349,8 +349,14 @@ fi
 
 log "========== Phase: Persist =========="
 
-# 更新 state.json
-python3 -c "
+# 更新 state（H4：优先用 state.sh 确定性写入，fallback 到原 python3）
+if [ -f .loopos/state.sh ]; then
+  for tid in $COMPLETED; do
+    bash .loopos/state.sh complete-task "$tid" 2>/dev/null || true
+  done
+  bash .loopos/state.sh set-branch "$BRANCH" 2>/dev/null || true
+else
+  python3 -c "
 import json
 state = json.load(open('.loopos/state.json'))
 completed = '${COMPLETED}'.split()
@@ -359,6 +365,7 @@ state['total_tasks_run'] += len(completed)
 state['current_branch'] = '$BRANCH'
 json.dump(state, open('.loopos/state.json', 'w'), indent=2)
 " 2>/dev/null || warn "Failed to update state.json"
+fi
 
 git add .loopos/
 git commit -m "[loopos] update state after workflow run" --allow-empty 2>/dev/null || true

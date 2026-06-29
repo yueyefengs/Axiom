@@ -113,6 +113,27 @@ analyst ──→ planner ──→ critic
 | `specs/interview-*.md` | 需求规格 | 主会话访谈 | planner |
 | `manual_review_needed.json` | 需人工介入 | persister | supervisor |
 
+### 状态写入（state.sh，H4 修复）
+
+状态文件（state.json / events.jsonl / decisions.json / lessons.jsonl / manual_review_needed.json）
+由 `.loopos/state.sh` 确定性写入（python3 原子操作 + append-only），agent 只执行固定命令，
+不手写 JSON。解决 H4：格式写坏 / 覆盖非 append / 漏字段 / state 与 event 不一致 / 半写损坏。
+
+| 命令 | 作用 |
+|------|------|
+| `state.sh init` | 初始化/校验所有状态文件 |
+| `state.sh event <type> [k=v]` | append events.jsonl（自动加 ts）|
+| `state.sh complete-task <id> [model]` | state.json + event task_completed（幂等）|
+| `state.sh fail-task <id> [reason]` | manual_review_needed.json + event task_failed |
+| `state.sh set-branch <branch>` | state.json current_branch |
+| `state.sh add-lesson '<json>'` | append lessons.jsonl |
+| `state.sh add-decision '<json>'` | decisions.json append |
+| `state.sh get <field>` / `get-completed` | 读 state.json |
+
+注：current_plan.json 结构由 planner 决定，仍由 agent 手写（无固定 schema）。state.sh 仍是
+agent 执行（JS 无 fs），但写入语义确定性在 shell——同 C4 的 wait 下沉思路，非确定性从"写什么"
+收窄到"是否执行命令"。
+
 ## 多模型路由
 
 ### 支持的模型

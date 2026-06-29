@@ -54,7 +54,7 @@ done
 # 复制 .loopos 配置
 echo ""
 echo "📁 Config:"
-for f in models.json agent-models.json tmux-worker.sh; do
+for f in models.json agent-models.json tmux-worker.sh state.sh; do
   if [ -f "$LOOPOS_SRC/$f" ]; then
     cp "$LOOPOS_SRC/$f" "$TARGET/.loopos/$f"
     echo "  ✓ $f"
@@ -77,7 +77,7 @@ else
 fi
 
 # 设置可执行权限
-chmod +x "$TARGET/.loopos/tmux-worker.sh" 2>/dev/null || true
+chmod +x "$TARGET/.loopos/tmux-worker.sh" "$TARGET/.loopos/state.sh" 2>/dev/null || true
 
 # 追加 .gitignore
 echo ""
