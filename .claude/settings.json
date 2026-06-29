@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .loopos/tmux-worker.sh log session_start 2>/dev/null || true; tmux list-sessions -F \"#{session_name}\" 2>/dev/null | grep \"^loopos-\" | while IFS= read -r s; do tmux kill-session -t \"$s\" 2>/dev/null; done",
+            "statusMessage": "Cleaning stale loopos tmux workers"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .loopos/tmux-worker.sh log session_end 2>/dev/null || true; tmux list-sessions -F \"#{session_name}\" 2>/dev/null | grep \"^loopos-\" | while IFS= read -r s; do tmux kill-session -t \"$s\" 2>/dev/null; done",
+            "statusMessage": "Killing loopos tmux workers on session end"
+          }
+        ]
+      }
+    ]
+  }
+}

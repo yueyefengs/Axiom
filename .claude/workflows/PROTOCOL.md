@@ -289,3 +289,48 @@ main ─────────────────────────
 | Verifier 不通过 | 标记到 manual_review_needed |
 | tmux worker 超时 | 默认 600s，可配置 LOOPOS_WORKER_TIMEOUT |
 | tmux worker 崩溃 | status 返回 "crashed"，升级到 Claude 原生模型 |
+
+## iterative-fix：同一外部 worker 续接多轮修 bug
+
+聚焦场景：修**单个 bug**，希望**同一个外部 opencode worker 带着首轮上下文连续改 N 轮**，每轮用 `verify_cmd` 验证，N 轮仍不过则交人工。与 supervisor-worker 的区别：supervisor-worker 是多任务 DAG 全流程；iterative-fix 是单 bug 的"续接+验证反馈"小循环，复用 worker 自己的对话历史（不靠 Claude debugger 重读代码）。
+
+### 调用
+
+```
+Workflow({ name: 'iterative-fix', args: {
+  bug_description: "...",          # 必填：bug 描述
+  workdir: ".",                    # 修复所在目录（opencode session 按目录存，续接必须同目录）
+  opencode_model: "anthropic/claude-haiku-4-5",  # 必填：opencode provider/model
+  verify_cmd: "npm test",          # 必填：定义"修好了"的验证命令，退出码 0 = 通过
+  max_rounds: 3,                   # 可选，默认 3
+  label: "optional-slug"           # 可选，用于 prompt/报告文件名
+}})
+```
+
+### 流程
+
+```
+Round 1:  spawn opencode → collect(回填 opencode_session_id) → verify_cmd
+            pass → 结束(fixed)     fail → 进 Round 2
+Round 2..N: resume <sid> 带上轮 verify 输出作反馈 → collect → verify_cmd
+            pass → 结束     fail → 下一轮
+N 轮用尽仍 fail → 写 .loopos/reports/manual_review_<label>.json，含 opencode_session_id
+                   人工可用 `opencode run -s <ses>` 在 workdir 接手继续
+```
+
+### verify_cmd 是命门
+
+调用方必须给准验证命令，否则"通过/失败"无意义。Axiom 自身无测试框架，修脚本类 bug 用 `bash -n <file>` + 功能性检查；目标项目用其 `npm test` / `pytest` / `go test` / build。
+
+### 相关 tmux-worker.sh 命令
+
+| 命令 | 作用 |
+|------|------|
+| `spawn opencode <model> <prompt> <workdir>` | 首轮启动，workdir 解析为绝对路径存 meta |
+| `collect <sid>` | 首轮收集，**自动从 stdout 解析 ses_xxx 回填 meta 的 opencode_session_id** |
+| `resume <sid> <prompt> [round]` | 续接 opencode session，输出 `.stdout.r<round>` |
+| `status <sid> [round]` / `collect <sid> [round]` | 续接轮用 round 号查 `.r<round>` 文件 |
+
+### 与清理 hook 的关系
+
+iterative-fix 每轮是独立短进程（spawn/resume 跑完 tmux session 自毁），复用的是 opencode 的 session id 而非保活 tmux session。SessionStart/SessionEnd 清理 hook 只杀 `loopos-` 前缀的 tmux session，不影响 opencode session 续接。

@@ -89,6 +89,7 @@ if [ -f "$TARGET/.gitignore" ]; then
 .loopos/reports/
 .loopos/workers/
 .loopos/specs/
+.loopos/logs/
 IGNORE
     echo "📝 .gitignore 已更新"
   else
@@ -100,6 +101,7 @@ else
 .loopos/reports/
 .loopos/workers/
 .loopos/specs/
+.loopos/logs/
 IGNORE
   echo "📝 .gitignore 已创建"
 fi

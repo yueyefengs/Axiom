@@ -566,17 +566,35 @@ const fullPlan = await agent(
   }
 )
 
-// DAG 分层
+// DAG 分层（静态拓扑）+ 孤儿依赖校验（C1）
+const allTaskIds = new Set(fullPlan.tasks.map(t => t.id))
+const orphanDeps = []
+for (const t of fullPlan.tasks) {
+  for (const dep of (t.depends_on || [])) {
+    if (!allTaskIds.has(dep)) orphanDeps.push({ task: t.id, bad_dep: dep })
+  }
+}
+if (orphanDeps.length > 0) {
+  log(`[LOOPLOG] {"event":"dag_orphan_deps","count":${orphanDeps.length}}`)
+  log(`ERROR: ${orphanDeps.length} orphan dependency reference(s): ${orphanDeps.map(o => o.task + '→' + o.bad_dep).join(', ')}`)
+}
+
 const done = {}
 const layers = []
 const remaining = [...fullPlan.tasks]
+const allResults = []  // 提前定义：分层阶段也要写入被阻塞任务
 
 while (remaining.length > 0) {
   const ready = remaining.filter(t =>
     (t.depends_on || []).every(dep => done[dep])
   )
   if (ready.length === 0) {
-    log('ERROR: circular dependency or unresolvable deps')
+    // C1: 不静默丢弃 — 把无法解析的任务（环或孤儿下游）标记为 blocked，加入结果
+    log(`[LOOPLOG] {"event":"dag_unresolvable","blocked":${JSON.stringify(remaining.map(t => t.id))}}`)
+    log(`ERROR: circular/unresolvable deps — ${remaining.length} task(s) blocked: ${remaining.map(t => t.id).join(', ')}`)
+    for (const t of remaining) {
+      allResults.push({ task: t, status: 'blocked_unresolvable', worktreeBranch: null, model_used: t.assigned_model || null })
+    }
     break
   }
   layers.push(ready)
@@ -588,21 +606,39 @@ while (remaining.length > 0) {
 }
 
 log(`DAG: ${layers.length} layers, ${fullPlan.tasks.length} tasks`)
+log(`[LOOPLOG] {"event":"dag_layers","count":${layers.length},"tasks":${fullPlan.tasks.length}}`)
 log(`Models:\n${fullPlan.tasks.map(t => `  ${t.id}: ${t.assigned_model || 'claude-sonnet'} (${t.complexity || '?'})`).join('\n')}`)
 
 const MAX_FIX_RETRIES = 3
-const allResults = []
 
-// ---- 逐层执行 ----
+// ---- 逐层执行（C1 运行时依赖门控：上游失败则下游 blocked）----
+const failedTaskIds = new Set()
+
 for (const layer of layers) {
-  log(`\n=== Layer: ${layer.map(t => t.id).join(', ')} ===`)
+  // 门控：依赖了已失败任务的本层任务，标记 blocked 不跑
+  const blocked = layer.filter(t => (t.depends_on || []).some(d => failedTaskIds.has(d)))
+  const runnable = layer.filter(t => !(t.depends_on || []).some(d => failedTaskIds.has(d)))
+
+  for (const t of blocked) {
+    log(`[LOOPLOG] {"event":"task_blocked","task":"${t.id}","reason":"upstream_failed"}`)
+    log(`[${t.id}] BLOCKED — upstream task failed, skipping`)
+    allResults.push({ task: t, status: 'blocked_upstream', worktreeBranch: null, model_used: t.assigned_model || null })
+  }
+
+  if (runnable.length === 0) {
+    log(`[LOOPLOG] {"event":"layer_skipped","layer":${JSON.stringify(layer.map(t => t.id))}}`)
+    continue
+  }
+
+  log(`\n=== Layer: ${runnable.map(t => t.id).join(', ')} ===`)
 
   const layerResults = await pipeline(
-    layer,
+    runnable,
 
     // Stage 1: 开发（worktree 隔离或 tmux worker）
     async (task) => {
       const modelKey = task.assigned_model || 'claude-sonnet'
+      log(`[LOOPLOG] {"event":"dev_start","task":"${task.id}","model":"${modelKey}"}`)
       log(`[${task.id}] Dev: ${task.title} → ${modelKey}`)
 
       const devPrompt = `You are a developer. Execute this task on the current branch.
@@ -784,6 +820,16 @@ FAILED REPORTS: ${failedReports.join(', ')}
     }
   )
 
+  // C1 运行时门控：本层未通过的任务加入 failed 集合，下游将被 blocked
+  for (const r of layerResults.filter(Boolean)) {
+    if (r.status !== 'passed') {
+      failedTaskIds.add(r.task.id)
+      log(`[LOOPLOG] {"event":"task_failed","task":"${r.task.id}","status":"${r.status}"}`)
+    } else {
+      log(`[LOOPLOG] {"event":"task_passed","task":"${r.task.id}","model":"${r.model_used || ''}"}`)
+    }
+  }
+
   // ---- 层内完成后：合并通过的 worktree 分支 → feature 分支 ----
   const passedInLayer = layerResults.filter(Boolean).filter(r => r.status === 'passed' && r.worktreeBranch)
 
@@ -826,8 +872,8 @@ IMPORTANT: Stay on ${featureBranch} when done.`,
 // ============================================================
 phase('Verify')
 
-const passed = allResults.filter(r => r && r.status === 'passed')
-const failed = allResults.filter(r => r && r.status !== 'passed')
+let passed = allResults.filter(r => r && r.status === 'passed')
+let failed = allResults.filter(r => r && r.status !== 'passed')
 
 if (passed.length > 0) {
   const verifyResult = await routeAgent(
@@ -851,10 +897,18 @@ INSTRUCTIONS:
     { label: 'verifier:final', schema: VERIFY_SCHEMA, agentType: 'verifier', model: resolveModel('verifier') }
   )
 
+  log(`[LOOPLOG] {"event":"verify","verdict":"${verifyResult.verdict}","gaps":${verifyResult.gaps || 0}}`)
   log(`Verification: ${verifyResult.verdict} (gaps: ${verifyResult.gaps || 0})`)
 
   if (verifyResult.verdict === 'FAIL') {
-    log('Verification FAILED. Check .loopos/reports/verify_final.json')
+    // C3: 验证失败不放过 — 降级 passed 任务为 verify_failed，重算，后续 Persist 写入 manual_review
+    log(`[LOOPLOG] {"event":"verify_fail","demoted":${JSON.stringify(passed.map(r => r.task.id))}}`)
+    log(`Verification FAILED — demoting ${passed.length} passed task(s) to verify_failed`)
+    for (const r of passed) {
+      r.status = 'verify_failed'
+    }
+    passed = allResults.filter(r => r && r.status === 'passed')
+    failed = allResults.filter(r => r && r.status !== 'passed')
   }
 }
 
@@ -862,6 +916,8 @@ INSTRUCTIONS:
 // Phase 5: Persist
 // ============================================================
 phase('Persist')
+
+log(`[LOOPLOG] {"event":"persist_start","passed":${passed.length},"failed":${failed.length}}`)
 
 const modelStats = {}
 allResults.forEach(r => {
@@ -896,7 +952,8 @@ DO:
 
 4. Update .loopos/current_plan.json: mark completed tasks
 
-5. If failures: write .loopos/manual_review_needed.json
+5. If failures (including verify_failed tasks): write .loopos/manual_review_needed.json
+   with each failed task id, its status, and the relevant report path.
 
 6. Clean up .loopos/workers/ session files (keep prompts for reference)
 
