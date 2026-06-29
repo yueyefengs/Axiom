@@ -30,6 +30,16 @@ const BRANCH_SCHEMA = {
   required: ['path', 'branch'],
 }
 
+const MERGE_SCHEMA = {
+  type: 'object',
+  properties: {
+    path: { type: 'string' },
+    branch: { type: 'string' },
+    build_ok: { type: 'boolean' },
+  },
+  required: ['path', 'branch'],
+}
+
 const TEST_RESULT_SCHEMA = {
   type: 'object',
   properties: {
@@ -379,6 +389,46 @@ WORKFLOW:
 }
 
 // ============================================================
+// mergeBranchToFeature — 把任务 worktree 分支 merge 回 featureBranch（C2）
+// dev/fix 完成即调用，使后续 worktree(base=head=featureBranch) 能看到前序改动
+// merge 是确定性 git 操作，由 agent 执行（JS 无 shell）
+// ============================================================
+async function mergeBranchToFeature(branch, taskId, kind) {
+  if (!branch) {
+    log(`[LOOPLOG] {"event":"merge_skip","task":"${taskId}","kind":"${kind}","reason":"no_branch"}`)
+    return { build_ok: true }
+  }
+  if (branch === featureBranch) {
+    log(`[LOOPLOG] {"event":"merge_skip","task":"${taskId}","kind":"${kind}","reason":"same_as_feature"}`)
+    return { build_ok: true }
+  }
+  log(`[LOOPLOG] {"event":"merge","task":"${taskId}","kind":"${kind}","branch":"${branch}"}`)
+  return await agent(
+    `Merge a task worktree branch into the current feature branch, then verify the build.
+
+FEATURE BRANCH: ${featureBranch}
+BRANCH TO MERGE: ${branch} (task ${taskId}, ${kind})
+
+WORKFLOW:
+1. Run: git checkout ${featureBranch}
+2. Run: git merge ${branch} --no-edit
+3. If merge conflict:
+   - Read the conflicted files
+   - Resolve preferring the incoming branch ${branch} for this task's changes, keep ${featureBranch} content elsewhere
+   - git add the resolved files
+   - git commit --no-edit
+4. Run build verification: go build ./...
+   - If go build fails (compile errors): record build_ok=false and a short error summary
+   - If go build succeeds OR the project is not Go (no go.mod): build_ok=true
+5. Clean up: git branch -d ${branch}  (only if merge succeeded; ignore error if not)
+6. Return { path: ".loopos/state.json", branch: "${featureBranch}", build_ok: <true|false> }
+
+Stay on ${featureBranch} when done.`,
+    { label: `merge:${taskId}:${kind}`, phase: 'Dev-Test Loop', schema: MERGE_SCHEMA }
+  )
+}
+
+// ============================================================
 // Phase 1: Init — 创建 feature 分支 + 加载状态
 // ============================================================
 phase('Init')
@@ -642,16 +692,15 @@ for (const layer of layers) {
 
   log(`\n=== Layer: ${runnable.map(t => t.id).join(', ')} ===`)
 
-  const layerResults = await pipeline(
-    runnable,
+  const layerResults = []
 
-    // Stage 1: 开发（worktree 隔离或 tmux worker）
-    async (task) => {
-      const modelKey = task.assigned_model || 'claude-sonnet'
-      log(`[LOOPLOG] {"event":"dev_start","task":"${task.id}","model":"${modelKey}"}`)
-      log(`[${task.id}] Dev: ${task.title} → ${modelKey}`)
+  for (const task of runnable) {
+    // ---- Stage 1: dev（worktree 隔离，base=head=featureBranch）----
+    const modelKey = task.assigned_model || 'claude-sonnet'
+    log(`[LOOPLOG] {"event":"dev_start","task":"${task.id}","model":"${modelKey}"}`)
+    log(`[${task.id}] Dev: ${task.title} → ${modelKey}`)
 
-      const devPrompt = `You are a developer. Execute this task on the current branch.
+    const devPrompt = `You are a developer. Execute this task on the current branch.
 
 TASK ID: ${task.id}
 TITLE: ${task.title}
@@ -670,116 +719,110 @@ WORKFLOW:
 7. Run: git branch --show-current
 8. Return { path: "<report path>", branch: "<current branch>" }`
 
-      let devReport
+    let devReport
+    if (isClaude(modelKey)) {
+      devReport = await agent(devPrompt, {
+        label: `dev:${task.id}`,
+        phase: 'Dev-Test Loop',
+        schema: BRANCH_SCHEMA,
+        isolation: 'worktree',
+        model: toShorthand(modelKey),
+      })
+    } else {
+      devReport = await executeWithExternal(task, modelKey, devPrompt, {
+        phase: 'Dev-Test Loop',
+        isolation: 'worktree',
+      })
+    }
 
-      if (isClaude(modelKey)) {
-        devReport = await agent(devPrompt, {
-          label: `dev:${task.id}`,
-          phase: 'Dev-Test Loop',
-          schema: BRANCH_SCHEMA,
-          isolation: 'worktree',
-          model: toShorthand(modelKey),
-        })
-      } else {
-        devReport = await executeWithExternal(task, modelKey, devPrompt, {
-          phase: 'Dev-Test Loop',
-          isolation: 'worktree',
-        })
-      }
+    if (!devReport || !devReport.path) {
+      log(`[${task.id}] Dev failed, skipping tests`)
+      layerResults.push({ task, status: 'dev_failed', worktreeBranch: null, model_used: modelKey })
+      continue
+    }
 
-      return {
-        task,
-        devReportPath: devReport ? devReport.path : null,
-        worktreeBranch: devReport ? devReport.branch : null,
-        modelKey,
-      }
-    },
+    let currentDevReport = devReport.path
+    let currentBranch = devReport.branch
+    let lastBuildOk = true
+    // C2: dev 完成即 merge 回 featureBranch + go build 验证；fix worktree(base=head) 能看到 dev 改动
+    const devMerge = await mergeBranchToFeature(currentBranch, task.id, 'dev')
+    if (devMerge && devMerge.build_ok === false) lastBuildOk = false
 
-    // Stage 2: 并行测试 + Code Review + 修复循环
-    async (devResult, originalTask) => {
-      if (!devResult || !devResult.devReportPath) {
-        log(`[${originalTask.id}] Dev failed, skipping tests`)
-        return { task: originalTask, status: 'dev_failed', worktreeBranch: null, modelKey: devResult ? devResult.modelKey : null }
-      }
+    // ---- Stage 2: 并行 test + review + 修复循环 ----
+    let allPassed = false
 
-      const task = devResult.task
-      const modelKey = devResult.modelKey
-      let currentDevReport = devResult.devReportPath
-      let currentBranch = devResult.worktreeBranch
-      let allPassed = false
+    for (let attempt = 0; attempt <= MAX_FIX_RETRIES; attempt++) {
+      if (attempt > 0) log(`[${task.id}] Fix ${attempt}/${MAX_FIX_RETRIES}`)
 
-      for (let attempt = 0; attempt <= MAX_FIX_RETRIES; attempt++) {
-        if (attempt > 0) log(`[${task.id}] Fix ${attempt}/${MAX_FIX_RETRIES}`)
-
-        // 并行: Logic Test + Quality Test + Code Review
-        const results = await parallel([
-          () => routeAgent(
-            `Logic test. DEV REPORT: ${currentDevReport}
+      // 并行: Logic Test + Quality Test + Code Review
+      const results = await parallel([
+        () => routeAgent(
+          `Logic test. DEV REPORT: ${currentDevReport}
 Read dev report → read changed files → check logic/edge cases/error handling for task ${task.id}.
 Write to .loopos/reports/test_logic_${task.id}.json. Return path + passed.`,
-            {
-              label: `test-logic:${task.id}:${attempt}`,
-              phase: 'Dev-Test Loop',
-              schema: TEST_RESULT_SCHEMA,
-              agentType: 'tester-logic',
-              model: resolveModel('tester-logic'),
-            }
-          ),
-          () => routeAgent(
-            `Quality test. DEV REPORT: ${currentDevReport}
+          {
+            label: `test-logic:${task.id}:${attempt}`,
+            phase: 'Dev-Test Loop',
+            schema: TEST_RESULT_SCHEMA,
+            agentType: 'tester-logic',
+            model: resolveModel('tester-logic'),
+          }
+        ),
+        () => routeAgent(
+          `Quality test. DEV REPORT: ${currentDevReport}
 Read dev report → read changed files → check naming/security/performance/consistency.
 Read .loopos/decisions.json if exists.
 Write to .loopos/reports/test_quality_${task.id}.json. Return path + passed.`,
-            {
-              label: `test-quality:${task.id}:${attempt}`,
-              phase: 'Dev-Test Loop',
-              schema: TEST_RESULT_SCHEMA,
-              agentType: 'tester-quality',
-              model: resolveModel('tester-quality'),
-            }
-          ),
-          () => routeAgent(
-            `Code review. DEV REPORT: ${currentDevReport}
+          {
+            label: `test-quality:${task.id}:${attempt}`,
+            phase: 'Dev-Test Loop',
+            schema: TEST_RESULT_SCHEMA,
+            agentType: 'tester-quality',
+            model: resolveModel('tester-quality'),
+          }
+        ),
+        () => routeAgent(
+          `Code review. DEV REPORT: ${currentDevReport}
 Read dev report → read changed files → check spec compliance, SOLID, security, performance.
 Read .loopos/current_plan.json for acceptance criteria.
 Read .loopos/decisions.json if exists.
 Write to .loopos/reports/review_${task.id}.json. Return path + verdict.`,
-            {
-              label: `review:${task.id}:${attempt}`,
-              phase: 'Dev-Test Loop',
-              schema: REVIEW_SCHEMA,
-              agentType: 'code-reviewer',
-              model: resolveModel('code-reviewer'),
-            }
-          ),
-        ])
+          {
+            label: `review:${task.id}:${attempt}`,
+            phase: 'Dev-Test Loop',
+            schema: REVIEW_SCHEMA,
+            agentType: 'code-reviewer',
+            model: resolveModel('code-reviewer'),
+          }
+        ),
+      ])
 
-        const [logicResult, qualityResult, reviewResult] = results
+      const [logicResult, qualityResult, reviewResult] = results
 
-        const testsOk = [logicResult, qualityResult].filter(Boolean).every(t => t.passed)
-        const reviewOk = reviewResult && reviewResult.verdict === 'APPROVE'
-        allPassed = testsOk && reviewOk
+      const testsOk = [logicResult, qualityResult].filter(Boolean).every(t => t.passed)
+      const reviewOk = reviewResult && reviewResult.verdict === 'APPROVE'
+      allPassed = testsOk && reviewOk
 
-        if (allPassed) {
-          log(`[${task.id}] Passed${attempt > 0 ? ` (${attempt} fixes)` : ''} [${modelKey}]`)
-          break
-        }
+      if (allPassed) {
+        log(`[${task.id}] Passed${attempt > 0 ? ` (${attempt} fixes)` : ''} [${modelKey}]`)
+        break
+      }
 
-        if (attempt >= MAX_FIX_RETRIES) {
-          log(`[${task.id}] Max retries, needs manual review`)
-          break
-        }
+      if (attempt >= MAX_FIX_RETRIES) {
+        log(`[${task.id}] Max retries, needs manual review`)
+        break
+      }
 
-        // 收集失败报告
-        const failedReports = []
-        if (logicResult && !logicResult.passed) failedReports.push(logicResult.path)
-        if (qualityResult && !qualityResult.passed) failedReports.push(qualityResult.path)
-        if (reviewResult && reviewResult.verdict !== 'APPROVE') failedReports.push(reviewResult.path)
+      // 收集失败报告
+      const failedReports = []
+      if (logicResult && !logicResult.passed) failedReports.push(logicResult.path)
+      if (qualityResult && !qualityResult.passed) failedReports.push(qualityResult.path)
+      if (reviewResult && reviewResult.verdict !== 'APPROVE') failedReports.push(reviewResult.path)
 
-        log(`[${task.id}] Issues found, fixing... (${failedReports.length} reports)`)
+      log(`[${task.id}] Issues found, fixing... (${failedReports.length} reports)`)
 
-        // 用 debugger agent 修复
-        const fixPrompt = `Fix issues in task ${task.id}: ${task.title}
+      // 用 debugger agent 修复
+      const fixPrompt = `Fix issues in task ${task.id}: ${task.title}
 
 PREVIOUS DEV REPORT: ${currentDevReport}
 FAILED REPORTS: ${failedReports.join(', ')}
@@ -794,41 +837,47 @@ FAILED REPORTS: ${failedReports.join(', ')}
 8. Run: git branch --show-current
 9. Return { path, branch }`
 
-        let fixReport
-        const debugModel = resolveModel('debugger', modelKey)
+      let fixReport
+      const debugModel = resolveModel('debugger', modelKey)
 
-        if (isClaude(debugModel)) {
-          fixReport = await agent(fixPrompt, {
-            label: `fix:${task.id}:${attempt + 1}`,
-            phase: 'Dev-Test Loop',
-            schema: BRANCH_SCHEMA,
-            isolation: 'worktree',
-            model: toShorthand(debugModel),
-            agentType: 'debugger',
-          })
-        } else {
-          fixReport = await executeWithExternal(task, debugModel, fixPrompt, {
-            label: `fix:${task.id}:${attempt + 1}`,
-            phase: 'Dev-Test Loop',
-            isolation: 'worktree',
-          })
-        }
-
-        if (fixReport) {
-          currentDevReport = fixReport.path
-          currentBranch = fixReport.branch
-        }
+      if (isClaude(debugModel)) {
+        fixReport = await agent(fixPrompt, {
+          label: `fix:${task.id}:${attempt + 1}`,
+          phase: 'Dev-Test Loop',
+          schema: BRANCH_SCHEMA,
+          isolation: 'worktree',
+          model: toShorthand(debugModel),
+          agentType: 'debugger',
+        })
+      } else {
+        fixReport = await executeWithExternal(task, debugModel, fixPrompt, {
+          label: `fix:${task.id}:${attempt + 1}`,
+          phase: 'Dev-Test Loop',
+          isolation: 'worktree',
+        })
       }
 
-      return {
-        task,
-        status: allPassed ? 'passed' : 'needs_manual_review',
-        devReport: currentDevReport,
-        worktreeBranch: currentBranch,
-        model_used: modelKey,
+      if (fixReport) {
+        currentDevReport = fixReport.path
+        currentBranch = fixReport.branch
+        // C2: fix 完成即 merge 回 featureBranch + go build 验证
+        const fixMerge = await mergeBranchToFeature(currentBranch, task.id, `fix${attempt + 1}`)
+        if (fixMerge && fixMerge.build_ok === false) lastBuildOk = false
       }
     }
-  )
+
+    const finalStatus = !allPassed ? 'needs_manual_review' : (lastBuildOk ? 'passed' : 'build_failed')
+    if (!allPassed || !lastBuildOk) {
+      log(`[LOOPLOG] {"event":"task_result","task":"${task.id}","status":"${finalStatus}","build_ok":${lastBuildOk}}`)
+    }
+    layerResults.push({
+      task,
+      status: finalStatus,
+      devReport: currentDevReport,
+      worktreeBranch: currentBranch,
+      model_used: modelKey,
+    })
+  }
 
   // C1 运行时门控：本层未通过的任务加入 failed 集合，下游将被 blocked
   for (const r of layerResults.filter(Boolean)) {
@@ -840,39 +889,7 @@ FAILED REPORTS: ${failedReports.join(', ')}
     }
   }
 
-  // ---- 层内完成后：合并通过的 worktree 分支 → feature 分支 ----
-  const passedInLayer = layerResults.filter(Boolean).filter(r => r.status === 'passed' && r.worktreeBranch)
-
-  if (passedInLayer.length > 0) {
-    log(`Merging ${passedInLayer.length} branches → ${featureBranch}`)
-
-    await agent(
-      `Merge completed task branches into the feature branch.
-
-FEATURE BRANCH: ${featureBranch}
-BRANCHES TO MERGE (task_id:branch_name):
-${passedInLayer.map(r => `- ${r.task.id}: ${r.worktreeBranch}`).join('\n')}
-
-WORKFLOW:
-1. Run: git checkout ${featureBranch}
-2. For each branch above, IN ORDER:
-   a. Run: git merge <branch> --no-edit
-   b. If merge conflict:
-      - Read the conflicted files
-      - Resolve conflicts (prefer the incoming branch's changes, but ensure consistency)
-      - git add the resolved files
-      - git commit --no-edit
-   c. Log result
-3. After all merges, clean up worktree branches:
-   For each branch: git branch -d <branch> (only if merge succeeded)
-4. Return { path: ".loopos/state.json", branch: "${featureBranch}" }
-
-IMPORTANT: Stay on ${featureBranch} when done.`,
-      { label: 'merge:layer', phase: 'Dev-Test Loop', schema: BRANCH_SCHEMA }
-    )
-
-    log(`Merged to ${featureBranch}`)
-  }
+  // C2: 层内任务已在 dev/fix 完成时逐个 merge 回 featureBranch，此处无需批量 merge
 
   allResults.push(...layerResults.filter(Boolean))
 }
