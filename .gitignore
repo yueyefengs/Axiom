@@ -1,0 +1,6 @@
+# LoopOS 运行时产物（日志 / 报告 / worker 临时文件 / 规格输出）
+# 配置文件（models.json / agent-models.json / state.json / tmux-worker.sh 等）仍纳入版本管理
+.loopos/logs/
+.loopos/workers/
+.loopos/reports/
+.loopos/specs/

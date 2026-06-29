@@ -37,7 +37,7 @@ AI 编程工具（Claude Code、Codex、Cursor）在复杂任务中会遇到：
 ```
 
 - **Supervisor** 只看到 JSON 路径和状态码，永远不读代码
-- **Worker** 在独立 worktree 中工作，互不干扰
+- **Worker** 在独立 worktree 中串行工作，dev/fix 完成即 merge 回 feature 分支并跑 `go build` 验证
 - **状态持久化** 到 `.loopos/` 目录，中断可恢复
 - **多模型路由** 根据任务复杂度自动分配最合适的模型
 
@@ -60,9 +60,8 @@ bash ~/code/Axiom/init-loopos.sh ~/code/my-project
 # 需求明确时 — 直接执行
 Workflow({ name: 'supervisor-worker', args: { request: '新增微信支付功能' } })
 
-# 需求模糊时 — 先做深度访谈
-Workflow({ name: 'deep-interview', args: { request: '我想做一个推荐系统' } })
-# → 产出 .loopos/specs/deep-interview-xxx.md
+# 需求模糊时 — 先 /deep-interview 访谈澄清（原 workflow 已改为 Skill）
+# 用 AskUserQuestion 逐维提问（goal/constraint/criteria/context），产出 .loopos/specs/interview-xxx.md
 Workflow({ name: 'supervisor-worker', args: { request: '...', spec: '.loopos/specs/xxx.md' } })
 ```
 
@@ -100,7 +99,7 @@ bash ~/code/Axiom/init-loopos.sh
  你的需求有多清楚？
        │
        ├── 模糊 ("做一个推荐系统")
-       │     → deep-interview 先行
+       │     → /deep-interview Skill 先行
        │     → 产出 spec 再交给 supervisor-worker
        │
        ├── 中等 ("新增微信支付，支持退款")
@@ -112,12 +111,12 @@ bash ~/code/Axiom/init-loopos.sh
 
 ```javascript
 // 模糊需求 — 务必先访谈
-Workflow({ name: 'deep-interview', args: { request: '我想做一个推荐系统' } })
-// → 产出 .loopos/specs/deep-interview-xxx.md
+/deep-interview   # 主会话访谈 Skill（AskUserQuestion 逐维澄清）
+// → 产出 .loopos/specs/interview-xxx.md
 // → 人工审阅 spec，确认后再执行
 Workflow({ name: 'supervisor-worker', args: {
   request: '基于协同过滤的推荐系统',
-  spec: '.loopos/specs/deep-interview-xxx.md'
+  spec: '.loopos/specs/interview-xxx.md'
 }})
 ```
 
@@ -239,7 +238,7 @@ Workflow({ name: 'supervisor-worker', args: {
 
 | 陷阱 | 后果 | 正确做法 |
 |------|------|---------|
-| 模糊需求直接执行 | Planner 猜错方向，浪费整轮 | 先 deep-interview |
+| 模糊需求直接执行 | Planner 猜错方向，浪费整轮 | 先 /deep-interview |
 | 执行中手动改文件 | worktree merge 冲突 | 等 Workflow 完成再改 |
 | 不看 `manual_review_needed.json` | 以为成功但实际有 3 个任务跳过 | 每次执行后必查 |
 | 所有 Agent 都用 opus | 成本 ×5，速度 ×0.3 | 只在关键角色用 opus |
@@ -251,18 +250,18 @@ Workflow({ name: 'supervisor-worker', args: {
 ### 完整流水线
 
 ```
-深度访谈 (可选)                      主流水线
-deep-interview                      supervisor-worker
+主会话访谈 (可选)                    主流水线
+AskUserQuestion                     supervisor-worker
   │                                   │
   ├── 探测项目上下文                    ├── Init: 建 feature 分支
   ├── 苏格拉底提问 ×N                  ├── Plan:
   ├── ambiguity 打分                  │   ├── Analyst 需求预检
   └── 输出 spec ──────────────→       │   ├── Planner 拆任务 + 模型分配
                                       │   └── Critic 审查计划
-                                      ├── Dev-Test Loop (per DAG layer):
-                                      │   ├── Developer (worktree/tmux 隔离)
+                                      ├── Dev-Test Loop (per DAG layer, 串行):
+                                      │   ├── Developer (worktree) → 即 merge + go build
                                       │   ├── parallel(Tester×2, Code-Reviewer)
-                                      │   └── Debugger 修复 (max 3 retries)
+                                      │   └── Debugger (worktree) → 即 merge + go build (max 3)
                                       ├── Verify: 全局验证 (测试+构建+验收)
                                       └── Persist: 更新状态 → Ready for PR
 ```
@@ -273,13 +272,9 @@ deep-interview                      supervisor-worker
 main ─────────────────────────────────────────
   │
   └─ feat/add-wechat-pay  (Init 创建)
-       ├─ worktree/t1 ──commit──┐  (Layer 1, 并行)
-       ├─ worktree/t2 ──commit──┤
-       │                        ▼
-       ├── merge t1,t2 ◄────────┘  ← Merge Agent
-       ├─ worktree/t3 ──commit──┐  (Layer 2)
-       │                        ▼
-       ├── merge t3 ◄───────────┘
+       ├─ worktree/t1 ──commit──→ merge + go build  (Layer 1, 串行)
+       ├─ worktree/t2 ──commit──→ merge + go build
+       ├─ worktree/t3 ──commit──→ merge + go build  (Layer 2, 依赖 t1)
        └── [loopos] update state    (Persist)
             ↓
        Ready for PR → main
@@ -349,7 +344,8 @@ Axiom/
 │   │   └── verifier.md
 │   └── workflows/           # Workflow 脚本
 │       ├── supervisor-worker-demo.js   # 主工作流
-│       ├── deep-interview.js           # 需求澄清
+│       ├── supervisor-with-memory.js   # 中断恢复
+│       ├── iterative-fix.js            # 单 bug 迭代修复
 │       └── PROTOCOL.md                 # 协议文档
 ├── .loopos/                  # 运行时状态 (两版共用)
 │   ├── models.json           # 模型注册表
@@ -358,7 +354,7 @@ Axiom/
 │   ├── decisions.json        # 架构决策
 │   ├── reports/              # Agent 报告
 │   ├── workers/              # tmux worker 文件
-│   └── specs/                # deep-interview 输出
+│   └── specs/                # /deep-interview 输出
 ├── codex-version/            # Codex 版
 │   ├── agents/               # 11 个 Agent 定义 (Codex 版)
 │   ├── scripts/
@@ -423,7 +419,7 @@ my-project/
 │   ├── decisions.json    # 架构决策
 │   ├── reports/          # Agent 报告输出
 │   ├── workers/          # tmux worker 文件
-│   └── specs/            # deep-interview 规格
+│   └── specs/            # /deep-interview 规格
 └── .gitignore            # 已追加 LoopOS 规则
 ```
 
@@ -513,10 +509,10 @@ Workflow({ name: 'supervisor-worker', args: {
   branch: 'feat/add-wechat-pay'
 }})
 
-// 传入 deep-interview 产出的 spec
+// 传入 /deep-interview 产出的 spec
 Workflow({ name: 'supervisor-worker', args: {
   request: '新增微信支付功能',
-  spec: '.loopos/specs/deep-interview-add-wechat-pay.md'
+  spec: '.loopos/specs/interview-add-wechat-pay.md'
 }})
 
 // 手动模型覆盖
@@ -556,23 +552,12 @@ Workflow({ name: 'supervisor-worker', args: {
 | Verify | verifier | 全局测试 + 验收标准检查 |
 | Persist | — | 更新 state、event log、commit |
 
-### Deep Interview Workflow
+### 需求澄清（/deep-interview Skill）
 
-文件：`.claude/workflows/deep-interview.js`
-
-```javascript
-// 基本调用
-Workflow({ name: 'deep-interview', args: {
-  request: '我想做一个推荐系统'
-}})
-
-// 自定义模糊度阈值（默认 0.2 = 20%）
-Workflow({ name: 'deep-interview', args: {
-  request: '我想做一个推荐系统',
-  threshold: 0.15,    // 更严格
-  max_rounds: 20      // 允许更多轮
-}})
-```
+原 deep-interview 后台 workflow 已改为 Skill（后台 workflow 无法与人交互，会生成空 spec）。
+主会话调用 `/deep-interview`，用 AskUserQuestion 逐维访谈（goal/constraint/criteria/context），
+保留 ambiguity 打分，输出 `.loopos/specs/interview-<slug>.md`，再传入 supervisor-worker 的 `spec` 参数。
+详见 `.claude/skills/deep-interview/SKILL.md`。
 
 **苏格拉底提问维度：**
 
@@ -757,8 +742,8 @@ Workflow({ name: 'supervisor-worker', args: {
 │   ├── <sid>.stdout        # worker 输出
 │   └── <sid>.exit_code     # 退出码
 │
-├── specs/                  # deep-interview 产出
-│   └── deep-interview-add-wechat-pay.md
+├── specs/                  # /deep-interview 产出
+│   └── interview-add-wechat-pay.md
 │
 └── manual_review_needed.json  # 需人工介入的任务
 ```

@@ -41,10 +41,10 @@ for f in "$AGENTS_SRC"/*.md; do
   echo "  ✓ $name"
 done
 
-# 复制 workflows (3 个)
+# 复制 workflows (4 个)
 echo ""
 echo "⚙️  Workflows:"
-for f in supervisor-worker-demo.js deep-interview.js PROTOCOL.md; do
+for f in supervisor-worker-demo.js supervisor-with-memory.js iterative-fix.js PROTOCOL.md; do
   if [ -f "$WORKFLOWS_SRC/$f" ]; then
     cp "$WORKFLOWS_SRC/$f" "$TARGET/.claude/workflows/$f"
     echo "  ✓ $f"
@@ -54,7 +54,7 @@ done
 # 复制 .loopos 配置
 echo ""
 echo "📁 Config:"
-for f in models.json agent-models.json tmux-worker.sh; do
+for f in models.json agent-models.json tmux-worker.sh state.sh; do
   if [ -f "$LOOPOS_SRC/$f" ]; then
     cp "$LOOPOS_SRC/$f" "$TARGET/.loopos/$f"
     echo "  ✓ $f"
@@ -77,7 +77,7 @@ else
 fi
 
 # 设置可执行权限
-chmod +x "$TARGET/.loopos/tmux-worker.sh" 2>/dev/null || true
+chmod +x "$TARGET/.loopos/tmux-worker.sh" "$TARGET/.loopos/state.sh" 2>/dev/null || true
 
 # 追加 .gitignore
 echo ""
@@ -89,6 +89,7 @@ if [ -f "$TARGET/.gitignore" ]; then
 .loopos/reports/
 .loopos/workers/
 .loopos/specs/
+.loopos/logs/
 IGNORE
     echo "📝 .gitignore 已更新"
   else
@@ -100,6 +101,7 @@ else
 .loopos/reports/
 .loopos/workers/
 .loopos/specs/
+.loopos/logs/
 IGNORE
   echo "📝 .gitignore 已创建"
 fi
@@ -107,12 +109,11 @@ fi
 # 统计
 echo ""
 AGENT_COUNT=$(ls "$TARGET/.claude/agents"/*.md 2>/dev/null | wc -l | tr -d ' ')
-echo "✅ 完成: ${AGENT_COUNT} agents, 2 workflows, 3 configs"
+echo "✅ 完成: ${AGENT_COUNT} agents, 4 workflows, 3 configs"
 echo ""
 echo "使用方式:"
 echo "  cd $TARGET"
 echo "  # 需求明确时:"
 echo "  Workflow({ name: 'supervisor-worker', args: { request: '你的需求' } })"
 echo ""
-echo "  # 需求模糊时:"
-echo "  Workflow({ name: 'deep-interview', args: { request: '你的想法' } })"
+echo "  # 需求模糊时: /deep-interview Skill 访谈澄清（原 workflow 已改为 Skill，见 PROTOCOL.md）"

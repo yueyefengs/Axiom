@@ -30,6 +30,16 @@ const BRANCH_SCHEMA = {
   required: ['path', 'branch'],
 }
 
+const MERGE_SCHEMA = {
+  type: 'object',
+  properties: {
+    path: { type: 'string' },
+    branch: { type: 'string' },
+    build_ok: { type: 'boolean' },
+  },
+  required: ['path', 'branch'],
+}
+
 const TEST_RESULT_SCHEMA = {
   type: 'object',
   properties: {
@@ -67,8 +77,26 @@ const PLAN_SCHEMA = {
     path: { type: 'string' },
     task_count: { type: 'number' },
     task_ids: { type: 'array', items: { type: 'string' } },
+    tasks: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          title: { type: 'string' },
+          description: { type: 'string' },
+          depends_on: { type: 'array', items: { type: 'string' } },
+          relevant_files: { type: 'array', items: { type: 'string' } },
+          acceptance_criteria: { type: 'string' },
+          complexity: { type: 'string' },
+          assigned_model: { type: 'string' },
+          model_reason: { type: 'string' },
+        },
+        required: ['id', 'title'],
+      },
+    },
   },
-  required: ['path', 'task_count', 'task_ids'],
+  required: ['path', 'task_count', 'task_ids', 'tasks'],
 }
 
 const CRITIC_SCHEMA = {
@@ -149,7 +177,7 @@ function lookupModel(name) {
 
 function isClaude(name) {
   const m = lookupModel(name)
-  return m ? m.type === 'claude' : /^(opus|sonnet|haiku|claude)/i.test(name)
+  return m ? m.type === 'claude' : false
 }
 
 function toShorthand(name) {
@@ -198,8 +226,8 @@ async function routeAgent(prompt, opts) {
   const entry = lookupModel(modelName)
 
   if (!entry) {
-    log(`WARNING: Unknown model "${modelName}", falling back to sonnet`)
-    return await agent(prompt, { ...opts, model: 'sonnet' })
+    // H3: 未知模型 fail fast，不静默降级（防止"以为省钱实际烧 sonnet"）
+    throw new Error(`Unknown model "${modelName}" — register it in MODEL_REGISTRY or fix .loopos/agent-models.json. Refusing silent fallback.`)
   }
 
   // Claude 直连
@@ -208,7 +236,7 @@ async function routeAgent(prompt, opts) {
   }
 
   // 外部模型 — 通过 haiku 桥接 agent 路由
-  const safeLabel = (opts.label || 'ext').replace(/[^a-z0-9_:-]/gi, '_')
+  const safeLabel = (opts.label || 'ext').replace(/[^a-z0-9_-]/gi, '_')
 
   if (entry.type === 'opencode') {
     // OpenCode CLI — 统一网关，支持所有 provider/model，有文件系统访问
@@ -221,16 +249,18 @@ AGENT TYPE: ${opts.agentType || 'generic'}
 ORIGINAL TASK:
 ${prompt}
 
-WORKFLOW:
+WORKFLOW (execute exactly these steps — do not improvise or poll manually):
 1. Write the complete task prompt to .loopos/workers/prompt_${safeLabel}.txt
    Include all context the external model needs (file paths, instructions, output format)
-2. Run: bash .loopos/tmux-worker.sh spawn opencode ${entry.opencode_model} .loopos/workers/prompt_${safeLabel}.txt .
-3. Parse session_id from spawn output
-4. Poll: bash .loopos/tmux-worker.sh status <session_id> (every 10s until completed/failed/timeout)
-5. Run: bash .loopos/tmux-worker.sh collect <session_id>
-6. Read .loopos/workers/<session_id>.stdout
-7. Process the external model's output and produce the required structured result
-8. Return the structured output exactly as instructed in the ORIGINAL TASK`,
+2. Run ONCE: bash .loopos/tmux-worker.sh spawn opencode ${entry.opencode_model} .loopos/workers/prompt_${safeLabel}.txt .
+   Parse session_id (loopos-...) from the JSON output.
+3. Run: bash .loopos/tmux-worker.sh wait <session_id>
+   This blocks at the shell level until a terminal state (completed/failed/timeout/crashed) and returns the status JSON.
+   If it returns status "running" (internal wait timed out), run \`wait <session_id>\` again. Repeat until status is NOT "running".
+4. Run: bash .loopos/tmux-worker.sh collect <session_id>
+5. Read .loopos/workers/<session_id>.stdout
+6. Process the external model's output and produce the required structured result
+7. Return the structured output exactly as instructed in the ORIGINAL TASK`,
       { ...opts, model: 'haiku', label: `oc:${safeLabel}` }
     )
   }
@@ -246,16 +276,18 @@ AGENT TYPE: ${opts.agentType || 'generic'}
 ORIGINAL TASK:
 ${prompt}
 
-WORKFLOW:
+WORKFLOW (execute exactly these steps — do not improvise or poll manually):
 1. Write the complete task prompt to .loopos/workers/prompt_${safeLabel}.txt
    Include all context the external model needs (file paths, instructions, output format)
-2. Run: bash .loopos/tmux-worker.sh spawn ${entry.provider} ${entry.model_id} .loopos/workers/prompt_${safeLabel}.txt .
-3. Parse session_id from spawn output
-4. Poll: bash .loopos/tmux-worker.sh status <session_id> (every 10s until completed/failed/timeout)
-5. Run: bash .loopos/tmux-worker.sh collect <session_id>
-6. Read .loopos/workers/<session_id>.stdout
-7. Process the external model's output and produce the required structured result
-8. Return the structured output exactly as instructed in the ORIGINAL TASK`,
+2. Run ONCE: bash .loopos/tmux-worker.sh spawn ${entry.provider} ${entry.model_id} .loopos/workers/prompt_${safeLabel}.txt .
+   Parse session_id (loopos-...) from the JSON output.
+3. Run: bash .loopos/tmux-worker.sh wait <session_id>
+   This blocks at the shell level until a terminal state (completed/failed/timeout/crashed) and returns the status JSON.
+   If it returns status "running" (internal wait timed out), run \`wait <session_id>\` again. Repeat until status is NOT "running".
+4. Run: bash .loopos/tmux-worker.sh collect <session_id>
+5. Read .loopos/workers/<session_id>.stdout
+6. Process the external model's output and produce the required structured result
+7. Return the structured output exactly as instructed in the ORIGINAL TASK`,
       { ...opts, model: 'haiku', label: `cli:${safeLabel}` }
     )
   }
@@ -270,15 +302,18 @@ AGENT TYPE: ${opts.agentType || 'generic'}
 ORIGINAL TASK:
 ${prompt}
 
-WORKFLOW:
+WORKFLOW (execute exactly these steps — do not improvise or poll manually):
 1. Read all files referenced in the ORIGINAL TASK to gather context
 2. Compose a comprehensive prompt including file contents and full task instructions
 3. Write to .loopos/workers/prompt_${safeLabel}.txt
-4. Run: bash .loopos/tmux-worker.sh spawn ${entry.provider} ${entry.model_id} .loopos/workers/prompt_${safeLabel}.txt .
-5. The API call completes synchronously — read .loopos/workers/<session_id>.stdout
-6. Process the external model's response
-7. Produce the required output (write reports, etc.) as instructed in the ORIGINAL TASK
-8. Return the structured output exactly as instructed`,
+4. Run ONCE: bash .loopos/tmux-worker.sh spawn ${entry.provider} ${entry.model_id} .loopos/workers/prompt_${safeLabel}.txt .
+   Parse session_id (loopos-...) from the JSON output.
+5. Run: bash .loopos/tmux-worker.sh wait <session_id>
+   Blocks at shell level until a terminal state (completed/failed/timeout/crashed). If it returns "running", run \`wait\` again until NOT "running".
+6. Run: bash .loopos/tmux-worker.sh collect <session_id>
+7. Read .loopos/workers/<session_id>.stdout
+8. Process the external model's response and produce the required output (write reports, etc.) as instructed in the ORIGINAL TASK
+9. Return the structured output exactly as instructed`,
     { ...opts, model: 'haiku', label: `api:${safeLabel}` }
   )
 }
@@ -286,8 +321,11 @@ WORKFLOW:
 // Dev/Debugger 专用外部路由（需要 worktree + git commit）
 async function executeWithExternal(task, modelName, devPrompt, opts) {
   const entry = lookupModel(modelName)
-  if (!entry || entry.type === 'claude') {
-    return await agent(devPrompt, { ...opts, model: entry ? entry.shorthand : 'sonnet' })
+  if (!entry) {
+    throw new Error(`Unknown model "${modelName}" — register it in MODEL_REGISTRY or fix .loopos/agent-models.json. Refusing silent fallback.`)
+  }
+  if (entry.type === 'claude') {
+    return await agent(devPrompt, { ...opts, model: entry.shorthand })
   }
 
   // opencode 和 cli 都走 tmux 路径
@@ -312,18 +350,17 @@ WORKFLOW:
    - Clear task description and acceptance criteria
    - Expected output format
 4. Write prompt to .loopos/workers/prompt_${task.id}.txt
-5. Run: bash .loopos/tmux-worker.sh spawn ${providerCmd} .loopos/workers/prompt_${task.id}.txt .
-6. Parse the session_id from the spawn output
-7. Poll status every 10 seconds:
-   bash .loopos/tmux-worker.sh status <session_id>
-   Wait until status is "completed", "failed", or "timeout"
-8. Run: bash .loopos/tmux-worker.sh collect <session_id>
-9. Read the worker's stdout file for the output
-10. Verify changes with git diff
-11. Write dev report to .loopos/reports/dev_${task.id}.json
-12. Git commit: "[${task.id}] ${task.title}"
-13. Run: git branch --show-current
-14. Return { path: report_path, branch: current_branch }
+5. Run ONCE: bash .loopos/tmux-worker.sh spawn ${providerCmd} .loopos/workers/prompt_${task.id}.txt .
+   Parse the session_id (loopos-...) from the spawn output.
+6. Run: bash .loopos/tmux-worker.sh wait <session_id>
+   This blocks at the shell level until a terminal state (completed/failed/timeout/crashed). If it returns "running" (internal wait timed out), run \`wait <session_id>\` again. Repeat until status is NOT "running".
+7. Run: bash .loopos/tmux-worker.sh collect <session_id>
+8. Read the worker's stdout file for the output
+9. Verify changes with git diff
+10. Write dev report to .loopos/reports/dev_${task.id}.json
+11. Git commit: "[${task.id}] ${task.title}"
+12. Run: git branch --show-current
+13. Return { path: report_path, branch: current_branch }
 
 IMPORTANT:
 - CLI workers run in a real terminal with full filesystem access
@@ -351,20 +388,64 @@ WORKFLOW:
 1. Read the relevant files
 2. Read .loopos/lessons.jsonl (if exists)
 3. Compose a coding prompt → write to .loopos/workers/prompt_${task.id}.txt
-4. Run: bash .loopos/tmux-worker.sh spawn ${entry.provider} ${entry.model_id} .loopos/workers/prompt_${task.id}.txt .
-5. The API call completes synchronously — read .loopos/workers/<session_id>.stdout
-6. Apply the external model's changes to actual files
-7. Run tests if available
-8. Write dev report to .loopos/reports/dev_${task.id}.json
-9. Git commit: "[${task.id}] ${task.title}"
-10. Run: git branch --show-current
-11. Return { path: report_path, branch: current_branch }`,
+4. Run ONCE: bash .loopos/tmux-worker.sh spawn ${entry.provider} ${entry.model_id} .loopos/workers/prompt_${task.id}.txt .
+   Parse the session_id (loopos-...) from the spawn output.
+5. Run: bash .loopos/tmux-worker.sh wait <session_id>
+   Blocks at shell level until a terminal state (completed/failed/timeout/crashed). If it returns "running", run \`wait\` again until NOT "running".
+6. Run: bash .loopos/tmux-worker.sh collect <session_id>
+7. Read .loopos/workers/<session_id>.stdout
+8. Apply the external model's changes to actual files
+9. Run tests if available
+10. Write dev report to .loopos/reports/dev_${task.id}.json
+11. Git commit: "[${task.id}] ${task.title}"
+12. Run: git branch --show-current
+13. Return { path: report_path, branch: current_branch }`,
     {
       ...opts,
       model: 'haiku',
       label: opts.label ? `api:${opts.label}` : `api:${task.id}`,
       schema: BRANCH_SCHEMA,
     }
+  )
+}
+
+// ============================================================
+// mergeBranchToFeature — 把任务 worktree 分支 merge 回 featureBranch（C2）
+// dev/fix 完成即调用，使后续 worktree(base=head=featureBranch) 能看到前序改动
+// merge 是确定性 git 操作，由 agent 执行（JS 无 shell）
+// ============================================================
+async function mergeBranchToFeature(branch, taskId, kind) {
+  if (!branch) {
+    log(`[LOOPLOG] {"event":"merge_skip","task":"${taskId}","kind":"${kind}","reason":"no_branch"}`)
+    return { build_ok: true }
+  }
+  if (branch === featureBranch) {
+    log(`[LOOPLOG] {"event":"merge_skip","task":"${taskId}","kind":"${kind}","reason":"same_as_feature"}`)
+    return { build_ok: true }
+  }
+  log(`[LOOPLOG] {"event":"merge","task":"${taskId}","kind":"${kind}","branch":"${branch}"}`)
+  return await agent(
+    `Merge a task worktree branch into the current feature branch, then verify the build.
+
+FEATURE BRANCH: ${featureBranch}
+BRANCH TO MERGE: ${branch} (task ${taskId}, ${kind})
+
+WORKFLOW:
+1. Run: git checkout ${featureBranch}
+2. Run: git merge ${branch} --no-edit
+3. If merge conflict:
+   - Read the conflicted files
+   - Resolve preferring the incoming branch ${branch} for this task's changes, keep ${featureBranch} content elsewhere
+   - git add the resolved files
+   - git commit --no-edit
+4. Run build verification: go build ./...
+   - If go build fails (compile errors): record build_ok=false and a short error summary
+   - If go build succeeds OR the project is not Go (no go.mod): build_ok=true
+5. Clean up: git branch -d ${branch}  (only if merge succeeded; ignore error if not)
+6. Return { path: ".loopos/state.json", branch: "${featureBranch}", build_ok: <true|false> }
+
+Stay on ${featureBranch} when done.`,
+    { label: `merge:${taskId}:${kind}`, phase: 'Dev-Test Loop', schema: MERGE_SCHEMA }
   )
 }
 
@@ -384,8 +465,7 @@ REQUESTED BRANCH NAME: ${branchName || 'auto-generate from request'}
 DO:
 1. mkdir -p .loopos/reports .loopos/workers
 
-2. Read .loopos/state.json if exists, otherwise create:
-   { "completed_tasks": [], "total_tasks_run": 0, "project_summary": "" }
+2. Run: bash .loopos/state.sh init   (creates/validates state.json + decisions.json + manual_review_needed.json + events.jsonl)
 
 3. Read .loopos/lessons.jsonl if exists (last 20 lines)
 
@@ -482,11 +562,14 @@ RULES:
 - Each task completable in ONE session, touching at most 3-5 files
 - Maximize parallelism, minimize dependencies
 - Include complexity and assigned_model for every task
-- Available external models: codex, codex-mini, gemini, cursor, deepseek, glm`,
+- Available external models: codex, codex-mini, gemini, cursor, deepseek, glm
+- Return the FULL tasks array in your structured output (each task with id/title/description/depends_on/relevant_files/acceptance_criteria/complexity/assigned_model/model_reason)`,
   { label: 'planner', schema: PLAN_SCHEMA, agentType: 'planner', model: resolveModel('planner') }
 )
 
 log(`Plan: ${plan.task_count} tasks → ${plan.task_ids.join(', ')}`)
+
+let finalPlan = plan  // L4: 复用 planner 返回的 tasks，避免再起 plan-reader 读文件
 
 // Step 2c: Critic 审查计划（可选 — 仅当任务数 ≥ 3 或涉及高复杂度时）
 if (plan.task_count >= 3 || args.critic !== false) {
@@ -522,11 +605,12 @@ ANALYST REPORT: ${analystReport.path}
 
 Read the critic's findings and address each one.
 Write revised plan to .loopos/current_plan.json.
-Return path + task info.`,
+Return path + task_count + task_ids + FULL tasks array (each task with id/title/description/depends_on/relevant_files/acceptance_criteria/complexity/assigned_model/model_reason).`,
       { label: 'replanner', schema: PLAN_SCHEMA, agentType: 'planner', model: resolveModel('planner') }
     )
 
     log(`Revised plan: ${replan.task_count} tasks`)
+    finalPlan = replan
   }
 }
 
@@ -535,48 +619,38 @@ Return path + task info.`,
 // ============================================================
 phase('Dev-Test Loop')
 
-const fullPlan = await agent(
-  `Read .loopos/current_plan.json and return structured data.`,
-  {
-    label: 'plan-reader',
-    schema: {
-      type: 'object',
-      properties: {
-        tasks: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              id: { type: 'string' },
-              title: { type: 'string' },
-              description: { type: 'string' },
-              depends_on: { type: 'array', items: { type: 'string' } },
-              relevant_files: { type: 'array', items: { type: 'string' } },
-              acceptance_criteria: { type: 'string' },
-              complexity: { type: 'string' },
-              assigned_model: { type: 'string' },
-              model_reason: { type: 'string' },
-            },
-            required: ['id', 'title'],
-          },
-        },
-      },
-      required: ['tasks'],
-    },
-  }
-)
+// L4: 直接复用 planner/replanner 返回的 tasks，不再起 plan-reader 读文件
+const fullPlan = finalPlan
 
-// DAG 分层
+// DAG 分层（静态拓扑）+ 孤儿依赖校验（C1）
+const allTaskIds = new Set(fullPlan.tasks.map(t => t.id))
+const orphanDeps = []
+for (const t of fullPlan.tasks) {
+  for (const dep of (t.depends_on || [])) {
+    if (!allTaskIds.has(dep)) orphanDeps.push({ task: t.id, bad_dep: dep })
+  }
+}
+if (orphanDeps.length > 0) {
+  log(`[LOOPLOG] {"event":"dag_orphan_deps","count":${orphanDeps.length}}`)
+  log(`ERROR: ${orphanDeps.length} orphan dependency reference(s): ${orphanDeps.map(o => o.task + '→' + o.bad_dep).join(', ')}`)
+}
+
 const done = {}
 const layers = []
 const remaining = [...fullPlan.tasks]
+const allResults = []  // 提前定义：分层阶段也要写入被阻塞任务
 
 while (remaining.length > 0) {
   const ready = remaining.filter(t =>
     (t.depends_on || []).every(dep => done[dep])
   )
   if (ready.length === 0) {
-    log('ERROR: circular dependency or unresolvable deps')
+    // C1: 不静默丢弃 — 把无法解析的任务（环或孤儿下游）标记为 blocked，加入结果
+    log(`[LOOPLOG] {"event":"dag_unresolvable","blocked":${JSON.stringify(remaining.map(t => t.id))}}`)
+    log(`ERROR: circular/unresolvable deps — ${remaining.length} task(s) blocked: ${remaining.map(t => t.id).join(', ')}`)
+    for (const t of remaining) {
+      allResults.push({ task: t, status: 'blocked_unresolvable', worktreeBranch: null, model_used: t.assigned_model || null })
+    }
     break
   }
   layers.push(ready)
@@ -588,24 +662,41 @@ while (remaining.length > 0) {
 }
 
 log(`DAG: ${layers.length} layers, ${fullPlan.tasks.length} tasks`)
+log(`[LOOPLOG] {"event":"dag_layers","count":${layers.length},"tasks":${fullPlan.tasks.length}}`)
 log(`Models:\n${fullPlan.tasks.map(t => `  ${t.id}: ${t.assigned_model || 'claude-sonnet'} (${t.complexity || '?'})`).join('\n')}`)
 
 const MAX_FIX_RETRIES = 3
-const allResults = []
 
-// ---- 逐层执行 ----
+// ---- 逐层执行（C1 运行时依赖门控：上游失败则下游 blocked）----
+const failedTaskIds = new Set()
+
 for (const layer of layers) {
-  log(`\n=== Layer: ${layer.map(t => t.id).join(', ')} ===`)
+  // 门控：依赖了已失败任务的本层任务，标记 blocked 不跑
+  const blocked = layer.filter(t => (t.depends_on || []).some(d => failedTaskIds.has(d)))
+  const runnable = layer.filter(t => !(t.depends_on || []).some(d => failedTaskIds.has(d)))
 
-  const layerResults = await pipeline(
-    layer,
+  for (const t of blocked) {
+    log(`[LOOPLOG] {"event":"task_blocked","task":"${t.id}","reason":"upstream_failed"}`)
+    log(`[${t.id}] BLOCKED — upstream task failed, skipping`)
+    allResults.push({ task: t, status: 'blocked_upstream', worktreeBranch: null, model_used: t.assigned_model || null })
+  }
 
-    // Stage 1: 开发（worktree 隔离或 tmux worker）
-    async (task) => {
-      const modelKey = task.assigned_model || 'claude-sonnet'
-      log(`[${task.id}] Dev: ${task.title} → ${modelKey}`)
+  if (runnable.length === 0) {
+    log(`[LOOPLOG] {"event":"layer_skipped","layer":${JSON.stringify(layer.map(t => t.id))}}`)
+    continue
+  }
 
-      const devPrompt = `You are a developer. Execute this task on the current branch.
+  log(`\n=== Layer: ${runnable.map(t => t.id).join(', ')} ===`)
+
+  const layerResults = []
+
+  for (const task of runnable) {
+    // ---- Stage 1: dev（worktree 隔离，base=head=featureBranch）----
+    const modelKey = task.assigned_model || 'claude-sonnet'
+    log(`[LOOPLOG] {"event":"dev_start","task":"${task.id}","model":"${modelKey}"}`)
+    log(`[${task.id}] Dev: ${task.title} → ${modelKey}`)
+
+    const devPrompt = `You are a developer. Execute this task on the current branch.
 
 TASK ID: ${task.id}
 TITLE: ${task.title}
@@ -624,116 +715,110 @@ WORKFLOW:
 7. Run: git branch --show-current
 8. Return { path: "<report path>", branch: "<current branch>" }`
 
-      let devReport
+    let devReport
+    if (isClaude(modelKey)) {
+      devReport = await agent(devPrompt, {
+        label: `dev:${task.id}`,
+        phase: 'Dev-Test Loop',
+        schema: BRANCH_SCHEMA,
+        isolation: 'worktree',
+        model: toShorthand(modelKey),
+      })
+    } else {
+      devReport = await executeWithExternal(task, modelKey, devPrompt, {
+        phase: 'Dev-Test Loop',
+        isolation: 'worktree',
+      })
+    }
 
-      if (isClaude(modelKey)) {
-        devReport = await agent(devPrompt, {
-          label: `dev:${task.id}`,
-          phase: 'Dev-Test Loop',
-          schema: BRANCH_SCHEMA,
-          isolation: 'worktree',
-          model: toShorthand(modelKey),
-        })
-      } else {
-        devReport = await executeWithExternal(task, modelKey, devPrompt, {
-          phase: 'Dev-Test Loop',
-          isolation: 'worktree',
-        })
-      }
+    if (!devReport || !devReport.path) {
+      log(`[${task.id}] Dev failed, skipping tests`)
+      layerResults.push({ task, status: 'dev_failed', worktreeBranch: null, model_used: modelKey })
+      continue
+    }
 
-      return {
-        task,
-        devReportPath: devReport ? devReport.path : null,
-        worktreeBranch: devReport ? devReport.branch : null,
-        modelKey,
-      }
-    },
+    let currentDevReport = devReport.path
+    let currentBranch = devReport.branch
+    let lastBuildOk = true
+    // C2: dev 完成即 merge 回 featureBranch + go build 验证；fix worktree(base=head) 能看到 dev 改动
+    const devMerge = await mergeBranchToFeature(currentBranch, task.id, 'dev')
+    if (devMerge && devMerge.build_ok === false) lastBuildOk = false
 
-    // Stage 2: 并行测试 + Code Review + 修复循环
-    async (devResult, originalTask) => {
-      if (!devResult || !devResult.devReportPath) {
-        log(`[${originalTask.id}] Dev failed, skipping tests`)
-        return { task: originalTask, status: 'dev_failed', worktreeBranch: null, modelKey: devResult ? devResult.modelKey : null }
-      }
+    // ---- Stage 2: 并行 test + review + 修复循环 ----
+    let allPassed = false
 
-      const task = devResult.task
-      const modelKey = devResult.modelKey
-      let currentDevReport = devResult.devReportPath
-      let currentBranch = devResult.worktreeBranch
-      let allPassed = false
+    for (let attempt = 0; attempt <= MAX_FIX_RETRIES; attempt++) {
+      if (attempt > 0) log(`[${task.id}] Fix ${attempt}/${MAX_FIX_RETRIES}`)
 
-      for (let attempt = 0; attempt <= MAX_FIX_RETRIES; attempt++) {
-        if (attempt > 0) log(`[${task.id}] Fix ${attempt}/${MAX_FIX_RETRIES}`)
-
-        // 并行: Logic Test + Quality Test + Code Review
-        const results = await parallel([
-          () => routeAgent(
-            `Logic test. DEV REPORT: ${currentDevReport}
+      // 并行: Logic Test + Quality Test + Code Review
+      const results = await parallel([
+        () => routeAgent(
+          `Logic test. DEV REPORT: ${currentDevReport}
 Read dev report → read changed files → check logic/edge cases/error handling for task ${task.id}.
 Write to .loopos/reports/test_logic_${task.id}.json. Return path + passed.`,
-            {
-              label: `test-logic:${task.id}:${attempt}`,
-              phase: 'Dev-Test Loop',
-              schema: TEST_RESULT_SCHEMA,
-              agentType: 'tester-logic',
-              model: resolveModel('tester-logic'),
-            }
-          ),
-          () => routeAgent(
-            `Quality test. DEV REPORT: ${currentDevReport}
+          {
+            label: `test-logic:${task.id}:${attempt}`,
+            phase: 'Dev-Test Loop',
+            schema: TEST_RESULT_SCHEMA,
+            agentType: 'tester-logic',
+            model: resolveModel('tester-logic'),
+          }
+        ),
+        () => routeAgent(
+          `Quality test. DEV REPORT: ${currentDevReport}
 Read dev report → read changed files → check naming/security/performance/consistency.
 Read .loopos/decisions.json if exists.
 Write to .loopos/reports/test_quality_${task.id}.json. Return path + passed.`,
-            {
-              label: `test-quality:${task.id}:${attempt}`,
-              phase: 'Dev-Test Loop',
-              schema: TEST_RESULT_SCHEMA,
-              agentType: 'tester-quality',
-              model: resolveModel('tester-quality'),
-            }
-          ),
-          () => routeAgent(
-            `Code review. DEV REPORT: ${currentDevReport}
+          {
+            label: `test-quality:${task.id}:${attempt}`,
+            phase: 'Dev-Test Loop',
+            schema: TEST_RESULT_SCHEMA,
+            agentType: 'tester-quality',
+            model: resolveModel('tester-quality'),
+          }
+        ),
+        () => routeAgent(
+          `Code review. DEV REPORT: ${currentDevReport}
 Read dev report → read changed files → check spec compliance, SOLID, security, performance.
 Read .loopos/current_plan.json for acceptance criteria.
 Read .loopos/decisions.json if exists.
 Write to .loopos/reports/review_${task.id}.json. Return path + verdict.`,
-            {
-              label: `review:${task.id}:${attempt}`,
-              phase: 'Dev-Test Loop',
-              schema: REVIEW_SCHEMA,
-              agentType: 'code-reviewer',
-              model: resolveModel('code-reviewer'),
-            }
-          ),
-        ])
+          {
+            label: `review:${task.id}:${attempt}`,
+            phase: 'Dev-Test Loop',
+            schema: REVIEW_SCHEMA,
+            agentType: 'code-reviewer',
+            model: resolveModel('code-reviewer'),
+          }
+        ),
+      ])
 
-        const [logicResult, qualityResult, reviewResult] = results
+      const [logicResult, qualityResult, reviewResult] = results
 
-        const testsOk = [logicResult, qualityResult].filter(Boolean).every(t => t.passed)
-        const reviewOk = reviewResult && reviewResult.verdict === 'APPROVE'
-        allPassed = testsOk && reviewOk
+      const testsOk = [logicResult, qualityResult].filter(Boolean).every(t => t.passed)
+      const reviewOk = reviewResult && reviewResult.verdict === 'APPROVE'
+      allPassed = testsOk && reviewOk
 
-        if (allPassed) {
-          log(`[${task.id}] Passed${attempt > 0 ? ` (${attempt} fixes)` : ''} [${modelKey}]`)
-          break
-        }
+      if (allPassed) {
+        log(`[${task.id}] Passed${attempt > 0 ? ` (${attempt} fixes)` : ''} [${modelKey}]`)
+        break
+      }
 
-        if (attempt >= MAX_FIX_RETRIES) {
-          log(`[${task.id}] Max retries, needs manual review`)
-          break
-        }
+      if (attempt >= MAX_FIX_RETRIES) {
+        log(`[${task.id}] Max retries, needs manual review`)
+        break
+      }
 
-        // 收集失败报告
-        const failedReports = []
-        if (logicResult && !logicResult.passed) failedReports.push(logicResult.path)
-        if (qualityResult && !qualityResult.passed) failedReports.push(qualityResult.path)
-        if (reviewResult && reviewResult.verdict !== 'APPROVE') failedReports.push(reviewResult.path)
+      // 收集失败报告
+      const failedReports = []
+      if (logicResult && !logicResult.passed) failedReports.push(logicResult.path)
+      if (qualityResult && !qualityResult.passed) failedReports.push(qualityResult.path)
+      if (reviewResult && reviewResult.verdict !== 'APPROVE') failedReports.push(reviewResult.path)
 
-        log(`[${task.id}] Issues found, fixing... (${failedReports.length} reports)`)
+      log(`[${task.id}] Issues found, fixing... (${failedReports.length} reports)`)
 
-        // 用 debugger agent 修复
-        const fixPrompt = `Fix issues in task ${task.id}: ${task.title}
+      // 用 debugger agent 修复
+      const fixPrompt = `Fix issues in task ${task.id}: ${task.title}
 
 PREVIOUS DEV REPORT: ${currentDevReport}
 FAILED REPORTS: ${failedReports.join(', ')}
@@ -742,81 +827,65 @@ FAILED REPORTS: ${failedReports.join(', ')}
 2. Read .loopos/lessons.jsonl for similar past issues
 3. Fix each issue with minimal diff
 4. Run tests to verify
-5. Append lesson to .loopos/lessons.jsonl
+5. Append lesson: bash .loopos/state.sh add-lesson '{"issue":"<what went wrong>","fix":"<the fix>"}'
 6. Update .loopos/reports/dev_${task.id}.json
 7. Git commit: "[${task.id}] fix: ..."
 8. Run: git branch --show-current
 9. Return { path, branch }`
 
-        let fixReport
-        const debugModel = resolveModel('debugger', modelKey)
+      let fixReport
+      const debugModel = resolveModel('debugger', modelKey)
 
-        if (isClaude(debugModel)) {
-          fixReport = await agent(fixPrompt, {
-            label: `fix:${task.id}:${attempt + 1}`,
-            phase: 'Dev-Test Loop',
-            schema: BRANCH_SCHEMA,
-            isolation: 'worktree',
-            model: toShorthand(debugModel),
-            agentType: 'debugger',
-          })
-        } else {
-          fixReport = await executeWithExternal(task, debugModel, fixPrompt, {
-            label: `fix:${task.id}:${attempt + 1}`,
-            phase: 'Dev-Test Loop',
-            isolation: 'worktree',
-          })
-        }
-
-        if (fixReport) {
-          currentDevReport = fixReport.path
-          currentBranch = fixReport.branch
-        }
+      if (isClaude(debugModel)) {
+        fixReport = await agent(fixPrompt, {
+          label: `fix:${task.id}:${attempt + 1}`,
+          phase: 'Dev-Test Loop',
+          schema: BRANCH_SCHEMA,
+          isolation: 'worktree',
+          model: toShorthand(debugModel),
+          agentType: 'debugger',
+        })
+      } else {
+        fixReport = await executeWithExternal(task, debugModel, fixPrompt, {
+          label: `fix:${task.id}:${attempt + 1}`,
+          phase: 'Dev-Test Loop',
+          isolation: 'worktree',
+        })
       }
 
-      return {
-        task,
-        status: allPassed ? 'passed' : 'needs_manual_review',
-        devReport: currentDevReport,
-        worktreeBranch: currentBranch,
-        model_used: modelKey,
+      if (fixReport) {
+        currentDevReport = fixReport.path
+        currentBranch = fixReport.branch
+        // C2: fix 完成即 merge 回 featureBranch + go build 验证
+        const fixMerge = await mergeBranchToFeature(currentBranch, task.id, `fix${attempt + 1}`)
+        if (fixMerge && fixMerge.build_ok === false) lastBuildOk = false
       }
     }
-  )
 
-  // ---- 层内完成后：合并通过的 worktree 分支 → feature 分支 ----
-  const passedInLayer = layerResults.filter(Boolean).filter(r => r.status === 'passed' && r.worktreeBranch)
-
-  if (passedInLayer.length > 0) {
-    log(`Merging ${passedInLayer.length} branches → ${featureBranch}`)
-
-    await agent(
-      `Merge completed task branches into the feature branch.
-
-FEATURE BRANCH: ${featureBranch}
-BRANCHES TO MERGE (task_id:branch_name):
-${passedInLayer.map(r => `- ${r.task.id}: ${r.worktreeBranch}`).join('\n')}
-
-WORKFLOW:
-1. Run: git checkout ${featureBranch}
-2. For each branch above, IN ORDER:
-   a. Run: git merge <branch> --no-edit
-   b. If merge conflict:
-      - Read the conflicted files
-      - Resolve conflicts (prefer the incoming branch's changes, but ensure consistency)
-      - git add the resolved files
-      - git commit --no-edit
-   c. Log result
-3. After all merges, clean up worktree branches:
-   For each branch: git branch -d <branch> (only if merge succeeded)
-4. Return { path: ".loopos/state.json", branch: "${featureBranch}" }
-
-IMPORTANT: Stay on ${featureBranch} when done.`,
-      { label: 'merge:layer', phase: 'Dev-Test Loop', schema: BRANCH_SCHEMA }
-    )
-
-    log(`Merged to ${featureBranch}`)
+    const finalStatus = !allPassed ? 'needs_manual_review' : (lastBuildOk ? 'passed' : 'build_failed')
+    if (!allPassed || !lastBuildOk) {
+      log(`[LOOPLOG] {"event":"task_result","task":"${task.id}","status":"${finalStatus}","build_ok":${lastBuildOk}}`)
+    }
+    layerResults.push({
+      task,
+      status: finalStatus,
+      devReport: currentDevReport,
+      worktreeBranch: currentBranch,
+      model_used: modelKey,
+    })
   }
+
+  // C1 运行时门控：本层未通过的任务加入 failed 集合，下游将被 blocked
+  for (const r of layerResults.filter(Boolean)) {
+    if (r.status !== 'passed') {
+      failedTaskIds.add(r.task.id)
+      log(`[LOOPLOG] {"event":"task_failed","task":"${r.task.id}","status":"${r.status}"}`)
+    } else {
+      log(`[LOOPLOG] {"event":"task_passed","task":"${r.task.id}","model":"${r.model_used || ''}"}`)
+    }
+  }
+
+  // C2: 层内任务已在 dev/fix 完成时逐个 merge 回 featureBranch，此处无需批量 merge
 
   allResults.push(...layerResults.filter(Boolean))
 }
@@ -826,8 +895,8 @@ IMPORTANT: Stay on ${featureBranch} when done.`,
 // ============================================================
 phase('Verify')
 
-const passed = allResults.filter(r => r && r.status === 'passed')
-const failed = allResults.filter(r => r && r.status !== 'passed')
+let passed = allResults.filter(r => r && r.status === 'passed')
+let failed = allResults.filter(r => r && r.status !== 'passed')
 
 if (passed.length > 0) {
   const verifyResult = await routeAgent(
@@ -851,10 +920,18 @@ INSTRUCTIONS:
     { label: 'verifier:final', schema: VERIFY_SCHEMA, agentType: 'verifier', model: resolveModel('verifier') }
   )
 
+  log(`[LOOPLOG] {"event":"verify","verdict":"${verifyResult.verdict}","gaps":${verifyResult.gaps || 0}}`)
   log(`Verification: ${verifyResult.verdict} (gaps: ${verifyResult.gaps || 0})`)
 
   if (verifyResult.verdict === 'FAIL') {
-    log('Verification FAILED. Check .loopos/reports/verify_final.json')
+    // C3: 验证失败不放过 — 降级 passed 任务为 verify_failed，重算，后续 Persist 写入 manual_review
+    log(`[LOOPLOG] {"event":"verify_fail","demoted":${JSON.stringify(passed.map(r => r.task.id))}}`)
+    log(`Verification FAILED — demoting ${passed.length} passed task(s) to verify_failed`)
+    for (const r of passed) {
+      r.status = 'verify_failed'
+    }
+    passed = allResults.filter(r => r && r.status === 'passed')
+    failed = allResults.filter(r => r && r.status !== 'passed')
   }
 }
 
@@ -862,6 +939,8 @@ INSTRUCTIONS:
 // Phase 5: Persist
 // ============================================================
 phase('Persist')
+
+log(`[LOOPLOG] {"event":"persist_start","passed":${passed.length},"failed":${failed.length}}`)
 
 const modelStats = {}
 allResults.forEach(r => {
@@ -885,22 +964,19 @@ DO:
 1. Ensure you are on branch: ${featureBranch}
    Run: git checkout ${featureBranch}
 
-2. Update .loopos/state.json:
-   - Add passed task IDs to completed_tasks
-   - Increment total_tasks_run
-   - Add "current_branch": "${featureBranch}"
+2. Run these deterministic state updates (do NOT edit .loopos/*.json by hand — use state.sh):
+   ${passed.map(r => `bash .loopos/state.sh complete-task ${r.task.id} ${r.model_used || ''}`).join('\n   ')}
+   ${failed.map(r => `bash .loopos/state.sh fail-task ${r.task.id} ${r.status || 'needs_manual_review'}`).join('\n   ')}
+   bash .loopos/state.sh set-branch ${featureBranch}
+   bash .loopos/state.sh event workflow_run branch=${featureBranch} passed=${passed.length} failed=${failed.length}
 
-3. Append to .loopos/events.jsonl:
-   - Per task: {"type":"task_completed","task_id":"...","model":"..."}
-   - Summary: {"type":"workflow_run","branch":"${featureBranch}","passed":${passed.length},"failed":${failed.length},"model_stats":${JSON.stringify(modelStats)}}
+3. Update .loopos/current_plan.json: mark completed tasks (plan structure varies, edit by hand)
 
-4. Update .loopos/current_plan.json: mark completed tasks
+4. Clean up .loopos/workers/ session files (keep prompts for reference)
 
-5. If failures: write .loopos/manual_review_needed.json
+5. Git commit: "[loopos] update state after workflow run"
 
-6. Clean up .loopos/workers/ session files (keep prompts for reference)
-
-7. Git commit: "[loopos] update state after workflow run"
+6. Run: git branch --show-current
 
 Return state path.`,
   { label: 'persister', schema: PATH_SCHEMA }
