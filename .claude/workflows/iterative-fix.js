@@ -80,7 +80,7 @@ ${feedbackBlock}
 STEPS:
 1. ${promptContent} Write it to ${promptFile}.
 ${spawnStep}
-3. Poll every 10s: bash .loopos/tmux-worker.sh status <sid>${isFirst ? '' : ` ${round}`} — until status is completed/failed/timeout (cap ~15 polls).
+3. Run: bash .loopos/tmux-worker.sh wait <sid>${isFirst ? '' : ` ${round}`} — it blocks at the shell level until a terminal state (completed/failed/timeout/crashed) and returns the status JSON. If it returns "running" (internal wait timed out), run \`wait\` again until status is NOT "running".
 ${collectStep}
 6. Read .loopos/workers/<sid>.meta.json and extract the opencode_session_id field (ses_...). On resume rounds it should already be present.
 7. Run verification: cd ${workdir} && ${verify_cmd} 2>&1 ; capture combined output and note exit code (0 = pass).

@@ -7,6 +7,7 @@
 #   ./tmux-worker.sh status <session_id> [round]
 #   ./tmux-worker.sh collect <session_id> [round]                # collect 会回填 opencode_session_id
 #   ./tmux-worker.sh kill <session_id>
+#   ./tmux-worker.sh wait <session_id> [round] [timeout]   # 阻塞到终态（确定性 shell 轮询，替代 agent 自由 poll）
 #   ./tmux-worker.sh list
 #
 # 支持的 provider:
@@ -330,6 +331,35 @@ do_status() {
 }
 
 # ============================================================
+# wait — 阻塞轮询直到终态或内部超时，返回最终 status JSON（C4 确定性 shell 轮询）
+# 替代 agent 自由 poll：轮询确定性下沉到 shell，调用方只需在返回 running 时再调一次
+# 用法: wait <session_id> [round] [timeout_secs]   默认 timeout=110s (< Bash 默认 120s 超时)
+# ============================================================
+do_wait() {
+  local sid="${1:?wait: session_id required}"
+  local round="${2:-}"
+  local timeout="${3:-${LOOPOS_WAIT_TIMEOUT:-110}}"
+  local elapsed=0
+  local status_json=""
+  while [ "$elapsed" -lt "$timeout" ]; do
+    status_json=$(do_status "$sid" "$round" 2>/dev/null || true)
+    case "$status_json" in
+      *'"status":"running"'*)
+        sleep 5
+        elapsed=$((elapsed + 5))
+        ;;
+      *)
+        # 终态：completed/failed/timeout/crashed/not_found
+        echo "$status_json"
+        return 0
+        ;;
+    esac
+  done
+  # 内部超时仍 running — 返回当前 status，调用方可再 wait
+  echo "${status_json:-{\"session_id\":\"$sid\",\"status\":\"unknown\"}}"
+}
+
+# ============================================================
 # collect — 收集结果 + 清理
 # ============================================================
 
@@ -492,6 +522,7 @@ case "$ACTION" in
   spawn)   shift; do_spawn "$@" ;;
   resume)  shift; do_resume "$@" ;;
   status)  shift; do_status "$@" ;;
+  wait)    shift; do_wait "$@" ;;
   collect) shift; do_collect "$@" ;;
   kill)    shift; do_kill "$@" ;;
   log)     shift; do_log "$@" ;;

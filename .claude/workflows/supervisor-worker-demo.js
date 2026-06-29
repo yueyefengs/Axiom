@@ -221,16 +221,18 @@ AGENT TYPE: ${opts.agentType || 'generic'}
 ORIGINAL TASK:
 ${prompt}
 
-WORKFLOW:
+WORKFLOW (execute exactly these steps — do not improvise or poll manually):
 1. Write the complete task prompt to .loopos/workers/prompt_${safeLabel}.txt
    Include all context the external model needs (file paths, instructions, output format)
-2. Run: bash .loopos/tmux-worker.sh spawn opencode ${entry.opencode_model} .loopos/workers/prompt_${safeLabel}.txt .
-3. Parse session_id from spawn output
-4. Poll: bash .loopos/tmux-worker.sh status <session_id> (every 10s until completed/failed/timeout)
-5. Run: bash .loopos/tmux-worker.sh collect <session_id>
-6. Read .loopos/workers/<session_id>.stdout
-7. Process the external model's output and produce the required structured result
-8. Return the structured output exactly as instructed in the ORIGINAL TASK`,
+2. Run ONCE: bash .loopos/tmux-worker.sh spawn opencode ${entry.opencode_model} .loopos/workers/prompt_${safeLabel}.txt .
+   Parse session_id (loopos-...) from the JSON output.
+3. Run: bash .loopos/tmux-worker.sh wait <session_id>
+   This blocks at the shell level until a terminal state (completed/failed/timeout/crashed) and returns the status JSON.
+   If it returns status "running" (internal wait timed out), run \`wait <session_id>\` again. Repeat until status is NOT "running".
+4. Run: bash .loopos/tmux-worker.sh collect <session_id>
+5. Read .loopos/workers/<session_id>.stdout
+6. Process the external model's output and produce the required structured result
+7. Return the structured output exactly as instructed in the ORIGINAL TASK`,
       { ...opts, model: 'haiku', label: `oc:${safeLabel}` }
     )
   }
@@ -246,16 +248,18 @@ AGENT TYPE: ${opts.agentType || 'generic'}
 ORIGINAL TASK:
 ${prompt}
 
-WORKFLOW:
+WORKFLOW (execute exactly these steps — do not improvise or poll manually):
 1. Write the complete task prompt to .loopos/workers/prompt_${safeLabel}.txt
    Include all context the external model needs (file paths, instructions, output format)
-2. Run: bash .loopos/tmux-worker.sh spawn ${entry.provider} ${entry.model_id} .loopos/workers/prompt_${safeLabel}.txt .
-3. Parse session_id from spawn output
-4. Poll: bash .loopos/tmux-worker.sh status <session_id> (every 10s until completed/failed/timeout)
-5. Run: bash .loopos/tmux-worker.sh collect <session_id>
-6. Read .loopos/workers/<session_id>.stdout
-7. Process the external model's output and produce the required structured result
-8. Return the structured output exactly as instructed in the ORIGINAL TASK`,
+2. Run ONCE: bash .loopos/tmux-worker.sh spawn ${entry.provider} ${entry.model_id} .loopos/workers/prompt_${safeLabel}.txt .
+   Parse session_id (loopos-...) from the JSON output.
+3. Run: bash .loopos/tmux-worker.sh wait <session_id>
+   This blocks at the shell level until a terminal state (completed/failed/timeout/crashed) and returns the status JSON.
+   If it returns status "running" (internal wait timed out), run \`wait <session_id>\` again. Repeat until status is NOT "running".
+4. Run: bash .loopos/tmux-worker.sh collect <session_id>
+5. Read .loopos/workers/<session_id>.stdout
+6. Process the external model's output and produce the required structured result
+7. Return the structured output exactly as instructed in the ORIGINAL TASK`,
       { ...opts, model: 'haiku', label: `cli:${safeLabel}` }
     )
   }
@@ -270,15 +274,18 @@ AGENT TYPE: ${opts.agentType || 'generic'}
 ORIGINAL TASK:
 ${prompt}
 
-WORKFLOW:
+WORKFLOW (execute exactly these steps — do not improvise or poll manually):
 1. Read all files referenced in the ORIGINAL TASK to gather context
 2. Compose a comprehensive prompt including file contents and full task instructions
 3. Write to .loopos/workers/prompt_${safeLabel}.txt
-4. Run: bash .loopos/tmux-worker.sh spawn ${entry.provider} ${entry.model_id} .loopos/workers/prompt_${safeLabel}.txt .
-5. The API call completes synchronously — read .loopos/workers/<session_id>.stdout
-6. Process the external model's response
-7. Produce the required output (write reports, etc.) as instructed in the ORIGINAL TASK
-8. Return the structured output exactly as instructed`,
+4. Run ONCE: bash .loopos/tmux-worker.sh spawn ${entry.provider} ${entry.model_id} .loopos/workers/prompt_${safeLabel}.txt .
+   Parse session_id (loopos-...) from the JSON output.
+5. Run: bash .loopos/tmux-worker.sh wait <session_id>
+   Blocks at shell level until a terminal state (completed/failed/timeout/crashed). If it returns "running", run \`wait\` again until NOT "running".
+6. Run: bash .loopos/tmux-worker.sh collect <session_id>
+7. Read .loopos/workers/<session_id>.stdout
+8. Process the external model's response and produce the required output (write reports, etc.) as instructed in the ORIGINAL TASK
+9. Return the structured output exactly as instructed`,
     { ...opts, model: 'haiku', label: `api:${safeLabel}` }
   )
 }
@@ -312,18 +319,17 @@ WORKFLOW:
    - Clear task description and acceptance criteria
    - Expected output format
 4. Write prompt to .loopos/workers/prompt_${task.id}.txt
-5. Run: bash .loopos/tmux-worker.sh spawn ${providerCmd} .loopos/workers/prompt_${task.id}.txt .
-6. Parse the session_id from the spawn output
-7. Poll status every 10 seconds:
-   bash .loopos/tmux-worker.sh status <session_id>
-   Wait until status is "completed", "failed", or "timeout"
-8. Run: bash .loopos/tmux-worker.sh collect <session_id>
-9. Read the worker's stdout file for the output
-10. Verify changes with git diff
-11. Write dev report to .loopos/reports/dev_${task.id}.json
-12. Git commit: "[${task.id}] ${task.title}"
-13. Run: git branch --show-current
-14. Return { path: report_path, branch: current_branch }
+5. Run ONCE: bash .loopos/tmux-worker.sh spawn ${providerCmd} .loopos/workers/prompt_${task.id}.txt .
+   Parse the session_id (loopos-...) from the spawn output.
+6. Run: bash .loopos/tmux-worker.sh wait <session_id>
+   This blocks at the shell level until a terminal state (completed/failed/timeout/crashed). If it returns "running" (internal wait timed out), run \`wait <session_id>\` again. Repeat until status is NOT "running".
+7. Run: bash .loopos/tmux-worker.sh collect <session_id>
+8. Read the worker's stdout file for the output
+9. Verify changes with git diff
+10. Write dev report to .loopos/reports/dev_${task.id}.json
+11. Git commit: "[${task.id}] ${task.title}"
+12. Run: git branch --show-current
+13. Return { path: report_path, branch: current_branch }
 
 IMPORTANT:
 - CLI workers run in a real terminal with full filesystem access
@@ -351,14 +357,18 @@ WORKFLOW:
 1. Read the relevant files
 2. Read .loopos/lessons.jsonl (if exists)
 3. Compose a coding prompt → write to .loopos/workers/prompt_${task.id}.txt
-4. Run: bash .loopos/tmux-worker.sh spawn ${entry.provider} ${entry.model_id} .loopos/workers/prompt_${task.id}.txt .
-5. The API call completes synchronously — read .loopos/workers/<session_id>.stdout
-6. Apply the external model's changes to actual files
-7. Run tests if available
-8. Write dev report to .loopos/reports/dev_${task.id}.json
-9. Git commit: "[${task.id}] ${task.title}"
-10. Run: git branch --show-current
-11. Return { path: report_path, branch: current_branch }`,
+4. Run ONCE: bash .loopos/tmux-worker.sh spawn ${entry.provider} ${entry.model_id} .loopos/workers/prompt_${task.id}.txt .
+   Parse the session_id (loopos-...) from the spawn output.
+5. Run: bash .loopos/tmux-worker.sh wait <session_id>
+   Blocks at shell level until a terminal state (completed/failed/timeout/crashed). If it returns "running", run \`wait\` again until NOT "running".
+6. Run: bash .loopos/tmux-worker.sh collect <session_id>
+7. Read .loopos/workers/<session_id>.stdout
+8. Apply the external model's changes to actual files
+9. Run tests if available
+10. Write dev report to .loopos/reports/dev_${task.id}.json
+11. Git commit: "[${task.id}] ${task.title}"
+12. Run: git branch --show-current
+13. Return { path: report_path, branch: current_branch }`,
     {
       ...opts,
       model: 'haiku',
