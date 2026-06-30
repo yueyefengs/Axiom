@@ -45,12 +45,14 @@ echo "📁 Config:"
 cp "$SCRIPT_DIR/loopos/models.json" "$TARGET/.loopos/models.json"
 echo "  ✓ models.json"
 
-# 复制 tmux-worker（如果 Claude 版有的话）
-if [ -f "$SCRIPT_DIR/../.loopos/tmux-worker.sh" ]; then
-  cp "$SCRIPT_DIR/../.loopos/tmux-worker.sh" "$TARGET/.loopos/tmux-worker.sh"
-  chmod +x "$TARGET/.loopos/tmux-worker.sh"
-  echo "  ✓ tmux-worker.sh"
-fi
+# 复制 tmux-worker / state / dashboard（从 Claude 版 .loopos/ 共享）
+for f in tmux-worker.sh state.sh dashboard.sh; do
+  if [ -f "$SCRIPT_DIR/../.loopos/$f" ]; then
+    cp "$SCRIPT_DIR/../.loopos/$f" "$TARGET/.loopos/$f"
+    chmod +x "$TARGET/.loopos/$f"
+    echo "  ✓ $f"
+  fi
+done
 
 # 初始化状态
 if [ ! -f "$TARGET/.loopos/state.json" ]; then

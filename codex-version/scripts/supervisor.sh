@@ -14,7 +14,7 @@ set -euo pipefail
 # 配置
 # ============================================================
 
-MAIN_MODEL="${LOOPOS_MODEL:-gpt-5.4-pro}"
+MAIN_MODEL="${LOOPOS_MODEL:-gpt-5.4}"
 FAST_MODEL="${LOOPOS_FAST_MODEL:-gpt-5.4-mini}"
 MAX_FIX_RETRIES=3
 CODEX_FLAGS="--dangerously-bypass-approvals-and-sandbox --skip-git-repo-check"
@@ -71,11 +71,15 @@ run_agent() {
 
   log "Running ${agent_name} (${model})..."
 
+  local err_file=".loopos/workers/${agent_name}.stderr"
+  mkdir -p .loopos/workers 2>/dev/null || true
   codex exec -m "$model" \
     --instructions "$instructions" \
     $CODEX_FLAGS \
-    "$prompt" 2>/dev/null || {
+    "$prompt" 2>"$err_file" || {
     warn "${agent_name} 执行失败，返回码: $?"
+    warn "stderr 末尾（完整见 $err_file）:"
+    tail -25 "$err_file" >&2 2>/dev/null || true
     return 1
   }
 }
