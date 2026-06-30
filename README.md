@@ -67,15 +67,46 @@ Workflow({ name: 'supervisor-worker', args: { request: '...', spec: '.loopos/spe
 
 ### 运行时 Dashboard
 
-实时查看 agent 运行状态 + token + 控制（另开一个终端）：
+实时查看 agent 运行状态 + token + 控制（另开一个终端，在目标项目根目录跑）。
+
+**启动实时看板**：
 ```bash
-bash .loopos/dashboard.sh watch       # tmux 4-pane: 事件流 / worker状态 / state / 控制
-bash .loopos/dashboard.sh agents      # 外部 worker 状态快照（sid/provider/model/status/token）
-bash .loopos/dashboard.sh kill <sid>  # 停止外部 worker
-bash .loopos/dashboard.sh resume      # 断点续连提示（supervisor-resume）
+bash .loopos/dashboard.sh watch
 ```
-数据持久化在 `.loopos/`（state.json + events.jsonl + workers/*.meta），中断后 `supervisor-resume` workflow 续跑。
-盲区：Claude 子 agent 的实时状态/token 拿不到（harness 不暴露），只能看外部 worker + 事件层调用点。
+启动 tmux 4-pane 看板（`Ctrl-b d` detach 后台继续，`Ctrl-b x` 杀 session）：
+```
+┌─────────────────────┬─────────────────────┐
+│ 事件流               │ 外部 worker 状态     │
+│ tail -f loopos.jsonl │ (2s 刷新)            │
+├─────────────────────┼─────────────────────┤
+│ 控制提示             │ 全局 state           │
+│ (命令列表)           │ (3s 刷新)            │
+└─────────────────────┴─────────────────────┘
+```
+
+**命令一览**（普通终端跑）：
+```bash
+bash .loopos/dashboard.sh watch       # tmux 4-pane 实时看板
+bash .loopos/dashboard.sh agents      # 外部 worker 状态快照（sid/provider/model/status/token）
+bash .loopos/dashboard.sh events [N]  # 最近 N 条事件（默认 20）
+bash .loopos/dashboard.sh state       # 全局 state.json
+bash .loopos/dashboard.sh kill <sid>  # 停止外部 worker
+bash .loopos/dashboard.sh resume      # 断点续连提示
+```
+
+**断点续连**：workflow 中断后，主会话跑：
+```javascript
+Workflow({ name: 'supervisor-resume', args: {} })
+```
+它读 `.loopos/state.json` + `manual_review_needed.json` + `current_plan.json`，续跑未完成 / 失败任务。数据持久化在 `.loopos/`（state.json + events.jsonl + workers/*.meta）。
+
+**停整个 workflow**：用 harness 的 `/tasks`（LoopOS 代码层做不到）。
+
+**盲区**：Claude 原生子 agent（analyst/planner/dev 等用 opus/sonnet/haiku）的实时状态和 token 拿不到——harness 不暴露 subagent 内部。dashboard 只能看：
+- 外部 worker（gpt/gemini/glm 等）完整状态 + token
+- workflow 事件层调用点（`dev_start` / `passed` / `failed` / `merge` / `build_failed`）
+
+token 仅外部 worker 有（tmux-worker collect 时 best-effort 从 stdout 提取，依赖 CLI 输出格式）。
 
 ### Codex 版
 
