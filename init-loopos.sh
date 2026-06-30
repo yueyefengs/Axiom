@@ -70,7 +70,7 @@ fi
 # 复制 .loopos 配置
 echo ""
 echo "📁 Config:"
-for f in models.json agent-models.json tmux-worker.sh state.sh; do
+for f in models.json agent-models.json tmux-worker.sh state.sh dashboard.sh; do
   if [ -f "$LOOPOS_SRC/$f" ]; then
     cp "$LOOPOS_SRC/$f" "$TARGET/.loopos/$f"
     echo "  ✓ $f"
@@ -93,7 +93,7 @@ else
 fi
 
 # 设置可执行权限
-chmod +x "$TARGET/.loopos/tmux-worker.sh" "$TARGET/.loopos/state.sh" 2>/dev/null || true
+chmod +x "$TARGET/.loopos/tmux-worker.sh" "$TARGET/.loopos/state.sh" "$TARGET/.loopos/dashboard.sh" 2>/dev/null || true
 
 # 追加 .gitignore
 echo ""
@@ -126,7 +126,7 @@ fi
 echo ""
 AGENT_COUNT=$(ls "$TARGET/.claude/agents"/*.md 2>/dev/null | wc -l | tr -d ' ')
 SKILL_COUNT=$(ls -d "$TARGET/.claude/skills"/*/ 2>/dev/null | wc -l | tr -d ' ')
-echo "✅ 完成: ${AGENT_COUNT} agents, 4 workflows, ${SKILL_COUNT} skills, 4 configs"
+echo "✅ 完成: ${AGENT_COUNT} agents, 4 workflows, ${SKILL_COUNT} skills, 4 configs + dashboard"
 echo ""
 echo "使用方式:"
 echo "  cd $TARGET"

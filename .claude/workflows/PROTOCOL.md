@@ -134,6 +134,25 @@ analyst ──→ planner ──→ critic
 agent 执行（JS 无 fs），但写入语义确定性在 shell——同 C4 的 wait 下沉思路，非确定性从"写什么"
 收窄到"是否执行命令"。
 
+### 运行时 dashboard（dashboard.sh）
+
+实时查看运行状态 + 控制（tmux + watch，无依赖）：
+
+| 命令 | 作用 |
+|------|------|
+| `dashboard.sh watch` | tmux 4-pane：事件流 / 外部 worker 状态 / 全局 state / 控制提示 |
+| `dashboard.sh agents` | 外部 worker 状态快照（sid/provider/model/status/token）|
+| `dashboard.sh events [N]` | 最近 N 条事件（默认 20）|
+| `dashboard.sh state` | 全局 state.json |
+| `dashboard.sh kill <sid>` | 停止外部 worker |
+| `dashboard.sh resume` | 断点续连提示（supervisor-resume workflow）|
+
+数据源：`.loopos/logs/loopos.jsonl` + `workers/*.meta.json` + `state.json`（都持久化）。
+token：仅外部 worker（tmux-worker collect 时 best-effort 从 stdout 提取 input/output_tokens，
+依赖 CLI 输出格式，可能为空）。
+盲区：Claude 原生子 agent 的实时状态/token 拿不到（harness 不暴露），只能看事件层调用点
+（dev_start/passed/failed）。停整个 workflow 需 harness `/tasks`，非 LoopOS 代码层。
+
 ## 多模型路由
 
 ### 支持的模型
@@ -171,6 +190,8 @@ agent 执行（JS 无 fs），但写入语义确定性在 shell——同 C4 的 
 | `.loopos/models.json` | 模型注册表（外部模型 provider 信息） |
 | `.loopos/agent-models.json` | Agent 模型配置（每个 Agent 用哪个 LLM） |
 | `.loopos/tmux-worker.sh` | tmux worker 生命周期管理 |
+| `.loopos/state.sh` | 确定性状态层（H4）|
+| `.loopos/dashboard.sh` | 运行时 dashboard（实时状态 + 控制）|
 | `.loopos/workers/` | worker 的 prompt、stdout、状态文件 |
 
 ### Agent 模型配置

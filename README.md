@@ -65,6 +65,18 @@ Workflow({ name: 'supervisor-worker', args: { request: '新增微信支付功能
 Workflow({ name: 'supervisor-worker', args: { request: '...', spec: '.loopos/specs/xxx.md' } })
 ```
 
+### 运行时 Dashboard
+
+实时查看 agent 运行状态 + token + 控制（另开一个终端）：
+```bash
+bash .loopos/dashboard.sh watch       # tmux 4-pane: 事件流 / worker状态 / state / 控制
+bash .loopos/dashboard.sh agents      # 外部 worker 状态快照（sid/provider/model/status/token）
+bash .loopos/dashboard.sh kill <sid>  # 停止外部 worker
+bash .loopos/dashboard.sh resume      # 断点续连提示（supervisor-resume）
+```
+数据持久化在 `.loopos/`（state.json + events.jsonl + workers/*.meta），中断后 `supervisor-resume` workflow 续跑。
+盲区：Claude 子 agent 的实时状态/token 拿不到（harness 不暴露），只能看外部 worker + 事件层调用点。
+
 ### Codex 版
 
 ```bash

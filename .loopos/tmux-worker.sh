@@ -359,6 +359,20 @@ do_wait() {
   echo "${status_json:-{\"session_id\":\"$sid\",\"status\":\"unknown\"}}"
 }
 
+# best-effort 写 token_usage 到 meta（dashboard 显示用；依赖 CLI 输出格式，可能提取不到）
+set_meta_token() {
+  local sid="$1" tokens="$2"
+  local meta="$WORKER_DIR/$sid.meta.json"
+  [ -f "$meta" ] || return 0
+  [ -n "$tokens" ] || return 0
+  local tmp="$WORKER_DIR/$sid.meta.tmp"
+  if grep -q '"token_usage"' "$meta"; then
+    awk -v t="$tokens" '{ sub(/"token_usage": *[0-9]+/, "\"token_usage\": " t); print }' "$meta" > "$tmp" && mv "$tmp" "$meta"
+  else
+    awk -v t="$tokens" '/"status":/{ print "  \"token_usage\": " t "," } { print }' "$meta" > "$tmp" && mv "$tmp" "$meta"
+  fi
+}
+
 # ============================================================
 # collect — 收集结果 + 清理
 # ============================================================
@@ -410,7 +424,14 @@ RESULTEOF
   # Kill tmux session if still alive (resume 复用同名 session，一并清理)
   tmux kill-session -t "$sid" 2>/dev/null || true
 
-  log_event "collect" "$sid" ",\"status\":\"$status\""
+  # best-effort: 提取 token usage 写 meta（dashboard 显示；格式依 CLI，提取不到则留空）
+  local in_tok out_tok tokens
+  in_tok=$(grep -oE '"input_tokens": *[0-9]+' "$stdout_file" 2>/dev/null | tail -1 | grep -oE '[0-9]+' || echo 0)
+  out_tok=$(grep -oE '"output_tokens": *[0-9]+' "$stdout_file" 2>/dev/null | tail -1 | grep -oE '[0-9]+' || echo 0)
+  tokens=$((in_tok + out_tok))
+  [ "$tokens" -gt 0 ] && set_meta_token "$sid" "$tokens"
+
+  log_event "collect" "$sid" ",\"status\":\"$status\",\"tokens\":${tokens:-0}"
 
   echo "$result_file"
 }
