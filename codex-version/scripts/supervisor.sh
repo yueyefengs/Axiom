@@ -15,7 +15,7 @@ set -euo pipefail
 # ============================================================
 
 MAIN_MODEL="${LOOPOS_MODEL:-gpt-5.4}"
-FAST_MODEL="${LOOPOS_FAST_MODEL:-gpt-5.4-mini}"
+FAST_MODEL="${LOOPOS_FAST_MODEL:-gpt-5.4}"
 MAX_FIX_RETRIES=3
 CODEX_FLAGS="--dangerously-bypass-approvals-and-sandbox --skip-git-repo-check"
 

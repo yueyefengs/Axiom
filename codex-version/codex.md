@@ -19,15 +19,15 @@ codex exec -m gpt-5.4 --instructions .codex/agents/developer.md "任务描述" \
 
 | Agent | 模型 | 用途 |
 |-------|------|------|
-| explorer | gpt-5.4-mini | 代码库搜索，文件定位 |
+| explorer | gpt-5.4 | 代码库搜索，文件定位 |
 | analyst | gpt-5.4 | 需求预检，缺口分析 |
 | planner | gpt-5.4 | 任务拆解，模型分配 |
 | architect | gpt-5.4 | 架构分析，设计评审 |
 | critic | gpt-5.4 | 最终质量关，对抗性审查 |
 | developer | gpt-5.4 | 任务实现 |
 | debugger | gpt-5.4 | 根因分析，最小修复 |
-| tester-logic | gpt-5.4-mini | 逻辑/边界/错误测试 |
-| tester-quality | gpt-5.4-mini | 质量/安全/性能检查 |
+| tester-logic | gpt-5.4 | 逻辑/边界/错误测试 |
+| tester-quality | gpt-5.4 | 质量/安全/性能检查 |
 | code-reviewer | gpt-5.4 | 代码审查，SOLID 检查 |
 | verifier | gpt-5.4 | 证据驱动的完成验证 |
 
@@ -85,14 +85,14 @@ bash .loopos/dashboard.sh resume      # 断点续连提示
 | 角色 | 默认模型 | 备选 |
 |------|---------|------|
 | 主力开发 | gpt-5.4 | claude-opus |
-| 测试/轻量 | gpt-5.4-mini | claude-haiku |
+| 测试/轻量 | gpt-5.4 | claude-haiku |
 | 外部 CLI | codex (o3) | gemini |
 | 外部 API | deepseek | glm |
 
 可通过环境变量覆盖：
 
 ```bash
-LOOPOS_MODEL=gpt-5.4 LOOPOS_FAST_MODEL=gpt-5.4-mini bash .codex/scripts/supervisor.sh "需求"
+LOOPOS_MODEL=gpt-5.4 LOOPOS_FAST_MODEL=gpt-5.4 bash .codex/scripts/supervisor.sh "需求"
 ```
 
 ## 故障排查
