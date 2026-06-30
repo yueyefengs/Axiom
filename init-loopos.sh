@@ -29,6 +29,7 @@ echo ""
 # 创建目录
 mkdir -p "$TARGET/.claude/agents" \
          "$TARGET/.claude/workflows" \
+         "$TARGET/.claude/skills" \
          "$TARGET/.loopos/reports" \
          "$TARGET/.loopos/workers" \
          "$TARGET/.loopos/specs"
@@ -50,6 +51,21 @@ for f in supervisor-worker-demo.js supervisor-with-memory.js iterative-fix.js PR
     echo "  ✓ $f"
   fi
 done
+
+# 复制 skills (主会话 Skill，如 deep-interview 访谈)
+SKILLS_SRC="$SCRIPT_DIR/.claude/skills"
+echo ""
+echo "🧠 Skills:"
+if [ -d "$SKILLS_SRC" ]; then
+  for d in "$SKILLS_SRC"/*/; do
+    [ -d "$d" ] || continue
+    name=$(basename "$d")
+    cp -r "$SKILLS_SRC/$name" "$TARGET/.claude/skills/"
+    echo "  ✓ $name"
+  done
+else
+  echo "  (源无 skills 目录)"
+fi
 
 # 复制 .loopos 配置
 echo ""
@@ -109,7 +125,8 @@ fi
 # 统计
 echo ""
 AGENT_COUNT=$(ls "$TARGET/.claude/agents"/*.md 2>/dev/null | wc -l | tr -d ' ')
-echo "✅ 完成: ${AGENT_COUNT} agents, 4 workflows, 3 configs"
+SKILL_COUNT=$(ls -d "$TARGET/.claude/skills"/*/ 2>/dev/null | wc -l | tr -d ' ')
+echo "✅ 完成: ${AGENT_COUNT} agents, 4 workflows, ${SKILL_COUNT} skills, 4 configs"
 echo ""
 echo "使用方式:"
 echo "  cd $TARGET"
